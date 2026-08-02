@@ -54,7 +54,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
-| `tui.input.newLine` | `shift+enter` | Insert new line |
+| `tui.input.newLine` | `shift+enter`, `ctrl+j` | Insert new line |
 | `tui.input.submit` | `enter` | Submit input |
 | `tui.input.tab` | `tab` | Tab / autocomplete |
 
@@ -78,6 +78,19 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | `tui.select.confirm` | `enter` | Confirm selection |
 | `tui.select.cancel` | `escape`, `ctrl+c` | Cancel selection |
 
+### TUI Fullscreen Viewport
+
+These actions apply when interactive mode uses `--ui-mode fullscreen` and target the primary transcript scroll region. Two-finger trackpad and mouse-wheel input scroll the region under the pointer, falling back to the transcript over the fixed editor/status/footer dock. Clicking an OSC 8 hyperlink opens it in the default handler. Dragging with the primary mouse button selects text and copies it to the clipboard; holding at the transcript's top or bottom edge auto-scrolls into off-screen content.
+
+| Keybinding id | Default | Description |
+|--------|---------|-------------|
+| `tui.altScreen.pageUp` | `pageUp` | Scroll the transcript up by one page |
+| `tui.altScreen.pageDown` | `pageDown` | Scroll the transcript down by one page |
+| `tui.altScreen.previousPrompt` | `ctrl+shift+up` | Jump to the previous marked message |
+| `tui.altScreen.nextPrompt` | `ctrl+shift+down` | Jump to the next marked message |
+| `tui.altScreen.top` | `home` | Scroll to the beginning of the transcript |
+| `tui.altScreen.bottom` | `end` | Scroll to the transcript end and follow new output |
+
 ### Application
 
 | Keybinding id | Default | Description |
@@ -86,7 +99,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | `app.clear` | `ctrl+c` | Clear editor |
 | `app.exit` | `ctrl+d` | Exit (when editor empty) |
 | `app.suspend` | `ctrl+z` (none on Windows) | Suspend to background |
-| `app.editor.external` | `ctrl+g` | Open in external editor (`$VISUAL` or `$EDITOR`) |
+| `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
 | `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows) | Paste image from clipboard |
 
 ### Sessions
@@ -119,6 +132,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
 | `app.tools.expand` | `ctrl+o` | Collapse or expand tool output |
+| `app.message.copy` | `ctrl+x` | Copy the last assistant message, or the selected message in `/tree` |
 | `app.message.followUp` | `alt+enter` | Queue follow-up message |
 | `app.message.dequeue` | `alt+up` | Restore queued messages to editor |
 

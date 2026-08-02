@@ -90,19 +90,32 @@ Without this propagation, typing with an IME (Chinese, Japanese, Korean, etc.) w
 
 ```typescript
 pi.on("session_start", async (_event, ctx) => {
-  const handle = ctx.ui.custom(myComponent);
-  // handle.requestRender() - trigger re-render
-  // handle.close() - restore normal UI
+  const result = await ctx.ui.custom<string | null>((tui, theme, keybindings, done) =>
+    new MyComponent({
+      theme,
+      keybindings,
+      onChange: () => tui.requestRender(),
+      onSelect: (value) => done(value),
+      onCancel: () => done(null),
+    })
+  );
 });
 ```
 
-**In custom tools** via `pi.ui.custom()`:
+**In custom tools** via `ctx.ui.custom()`:
 
 ```typescript
-async execute(toolCallId, params, onUpdate, ctx, signal) {
-  const handle = pi.ui.custom(myComponent);
-  // ...
-  handle.close();
+async execute(toolCallId, params, signal, onUpdate, ctx) {
+  const result = await ctx.ui.custom<string | null>((tui, theme, keybindings, done) =>
+    new MyComponent({
+      theme,
+      keybindings,
+      onChange: () => tui.requestRender(),
+      onSelect: (value) => done(value),
+      onCancel: () => done(null),
+    })
+  );
+  // Use result...
 }
 ```
 
@@ -374,24 +387,26 @@ Usage in an extension:
 ```typescript
 pi.registerCommand("pick", {
   description: "Pick an item",
-  handler: async (args, ctx) => {
+  handler: async (_args, ctx) => {
     const items = ["Option A", "Option B", "Option C"];
-    const selector = new MySelector(items);
-    
-    let handle: { close: () => void; requestRender: () => void };
-    
-    await new Promise<void>((resolve) => {
-      selector.onSelect = (item) => {
-        ctx.ui.notify(`Selected: ${item}`, "info");
-        handle.close();
-        resolve();
+    const selected = await ctx.ui.custom<string | null>((tui, _theme, _keybindings, done) => {
+      const selector = new MySelector(items);
+      selector.onSelect = done;
+      selector.onCancel = () => done(null);
+
+      return {
+        render: (width) => selector.render(width),
+        handleInput: (data) => {
+          selector.handleInput(data);
+          tui.requestRender();
+        },
+        invalidate: () => selector.invalidate(),
       };
-      selector.onCancel = () => {
-        handle.close();
-        resolve();
-      };
-      handle = ctx.ui.custom(selector);
     });
+
+    if (selected !== null) {
+      ctx.ui.notify(`Selected: ${selected}`, "info");
+    }
   }
 });
 ```
@@ -424,7 +439,7 @@ renderResult(result, options, theme, context) {
 | Diffs | `toolDiffAdded`, `toolDiffRemoved`, `toolDiffContext` |
 | Markdown | `mdHeading`, `mdLink`, `mdLinkUrl`, `mdCode`, `mdCodeBlock`, `mdCodeBlockBorder`, `mdQuote`, `mdQuoteBorder`, `mdHr`, `mdListBullet` |
 | Syntax | `syntaxComment`, `syntaxKeyword`, `syntaxFunction`, `syntaxVariable`, `syntaxString`, `syntaxNumber`, `syntaxType`, `syntaxOperator`, `syntaxPunctuation` |
-| Thinking | `thinkingOff`, `thinkingMinimal`, `thinkingLow`, `thinkingMedium`, `thinkingHigh`, `thinkingXhigh` |
+| Thinking | `thinkingOff`, `thinkingMinimal`, `thinkingLow`, `thinkingMedium`, `thinkingHigh`, `thinkingXhigh`, `thinkingMax` |
 | Modes | `bashMode` |
 
 **Background colors** (`theme.bg(color, text)`):
@@ -486,7 +501,7 @@ class CachedComponent {
 }
 ```
 
-Call `invalidate()` when state changes, then `handle.requestRender()` to trigger re-render.
+Call `invalidate()` when state changes, then use the injected `tui.requestRender()` to trigger re-render.
 
 ## Invalidation and Theme Changes
 
@@ -742,7 +757,7 @@ ctx.ui.setStatus("my-ext", ctx.ui.theme.fg("accent", "● active"));
 ctx.ui.setStatus("my-ext", undefined);
 ```
 
-**Examples:** [status-line.ts](../examples/extensions/status-line.ts), [plan-mode.ts](../examples/extensions/plan-mode.ts), [preset.ts](../examples/extensions/preset.ts)
+**Examples:** [status-line.ts](../examples/extensions/status-line.ts), [plan-mode/index.ts](../examples/extensions/plan-mode/index.ts), [preset.ts](../examples/extensions/preset.ts)
 
 ### Pattern 4b: Working Indicator Customization
 
@@ -802,7 +817,7 @@ ctx.ui.setWidget("my-widget", (_tui, theme) => {
 ctx.ui.setWidget("my-widget", undefined);
 ```
 
-**Examples:** [plan-mode.ts](../examples/extensions/plan-mode.ts)
+**Examples:** [plan-mode/index.ts](../examples/extensions/plan-mode/index.ts)
 
 ### Pattern 6: Custom Footer
 
@@ -885,9 +900,9 @@ class VimEditor extends CustomEditor {
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
-    // Factory receives theme and keybindings from the app
+    // Factory receives the TUI, theme, and keybindings from the app
     ctx.ui.setEditorComponent((tui, theme, keybindings) =>
-      new VimEditor(theme, keybindings)
+      new VimEditor(tui, theme, keybindings)
     );
   });
 }
@@ -919,7 +934,7 @@ export default function (pi: ExtensionAPI) {
 - **Selection UI**: [examples/extensions/preset.ts](../examples/extensions/preset.ts) - SelectList with DynamicBorder framing
 - **Async with cancel**: [examples/extensions/qna.ts](../examples/extensions/qna.ts) - BorderedLoader for LLM calls
 - **Settings toggles**: [examples/extensions/tools.ts](../examples/extensions/tools.ts) - SettingsList for tool enable/disable
-- **Status indicators**: [examples/extensions/plan-mode.ts](../examples/extensions/plan-mode.ts) - setStatus and setWidget
+- **Status indicators**: [examples/extensions/plan-mode/index.ts](../examples/extensions/plan-mode/index.ts) - setStatus and setWidget
 - **Working indicator**: [examples/extensions/working-indicator.ts](../examples/extensions/working-indicator.ts) - setWorkingIndicator
 - **Custom footer**: [examples/extensions/custom-footer.ts](../examples/extensions/custom-footer.ts) - setFooter with stats
 - **Custom editor**: [examples/extensions/modal-editor.ts](../examples/extensions/modal-editor.ts) - Vim-like modal editing

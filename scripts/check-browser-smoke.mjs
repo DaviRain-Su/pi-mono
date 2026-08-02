@@ -1,24 +1,44 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { build } from "esbuild";
 
 const outputPath = join(tmpdir(), "pi-browser-smoke.js");
-const baseOutputPath = join(tmpdir(), "pi-browser-base-smoke.js");
-const selectiveOutputPath = join(tmpdir(), "pi-browser-selective-smoke.js");
+const agentTreeshakeOutputPath = join(tmpdir(), "pi-agent-treeshake-smoke.js");
 const errorLogPath = join(tmpdir(), "pi-browser-smoke-errors.log");
-const providerImplementationInputs = [
-	"packages/ai/src/providers/amazon-bedrock.ts",
-	"packages/ai/src/providers/anthropic.ts",
-	"packages/ai/src/providers/azure-openai-responses.ts",
-	"packages/ai/src/providers/google.ts",
-	"packages/ai/src/providers/google-vertex.ts",
-	"packages/ai/src/providers/images/openrouter.ts",
-	"packages/ai/src/providers/mistral.ts",
-	"packages/ai/src/providers/openai-codex-responses.ts",
-	"packages/ai/src/providers/openai-completions.ts",
-	"packages/ai/src/providers/openai-responses.ts",
-];
+const generatedCatalogDataDir = join(process.cwd(), "packages/ai/src/providers/data");
+
+// Fresh checkouts do not materialize provider JSON until model data is hydrated.
+const generatedCatalogDataPlugin = {
+	name: "generated-model-catalog",
+	setup(build) {
+		build.onResolve({ filter: /^\.\/data\/[^/]+\.json$/ }, (args) => {
+			const path = resolve(dirname(args.importer), args.path);
+			if (dirname(path) !== generatedCatalogDataDir || existsSync(path)) return;
+			return { path, namespace: "empty-generated-model-catalog" };
+		});
+		build.onLoad({ filter: /.*/, namespace: "empty-generated-model-catalog" }, () => ({
+			contents: "{}",
+			loader: "json",
+		}));
+	},
+};
+
+function normalizePath(path) {
+	return path.replaceAll("\\", "/");
+}
+
+function findInput(inputs, suffix) {
+	return Object.keys(inputs).find((input) => {
+		const normalized = normalizePath(input);
+		return normalized === suffix || normalized.endsWith(`/${suffix}`);
+	});
+}
+
+function includesNodePackage(inputs, packageName) {
+	const marker = `node_modules/${packageName}/`;
+	return Object.keys(inputs).some((input) => normalizePath(input).includes(marker));
+}
 
 try {
 	await build({
@@ -28,37 +48,65 @@ try {
 		format: "esm",
 		logLevel: "silent",
 		outfile: outputPath,
+		plugins: [generatedCatalogDataPlugin],
 	});
-	const baseBuild = await build({
-		stdin: {
-			contents: `import { complete } from "@earendil-works/pi-ai/base";\nimport { Agent } from "@earendil-works/pi-agent-core/base";\nconsole.log(typeof complete, typeof Agent);\n`,
-			resolveDir: process.cwd(),
-			sourcefile: "pi-browser-base-smoke-entry.ts",
-		},
+
+	const agentTreeshakeBuild = await build({
+		entryPoints: ["scripts/agent-treeshake-smoke-entry.ts"],
 		bundle: true,
 		platform: "browser",
 		format: "esm",
 		logLevel: "silent",
 		metafile: true,
-		outfile: baseOutputPath,
+		outfile: agentTreeshakeOutputPath,
+		plugins: [generatedCatalogDataPlugin],
+		write: false,
 	});
-	const bundledInputs = new Set(Object.keys(baseBuild.metafile.inputs));
-	const reachableProviderImplementations = providerImplementationInputs.filter((input) => bundledInputs.has(input));
-	if (reachableProviderImplementations.length > 0) {
-		throw new Error(`Base browser bundle reached provider implementations:\n${reachableProviderImplementations.join("\n")}`);
+	const inputs = agentTreeshakeBuild.metafile.inputs;
+	for (const forbiddenInput of [
+		"packages/ai/src/compat.ts",
+		"packages/ai/src/models.generated.ts",
+		"packages/ai/src/providers/all.ts",
+	]) {
+		const includedInput = findInput(inputs, forbiddenInput);
+		if (includedInput) {
+			throw new Error(`Agent selective-provider bundle unexpectedly includes ${includedInput}`);
+		}
 	}
-	await build({
-		stdin: {
-			contents: `import { register as registerAnthropic } from "@earendil-works/pi-ai/anthropic";\nimport { register as registerOpenAICompletions } from "@earendil-works/pi-ai/openai-completions";\nimport { register as registerOpenRouterImages } from "@earendil-works/pi-ai/openrouter-images";\nconsole.log(typeof registerAnthropic, typeof registerOpenAICompletions, typeof registerOpenRouterImages);\n`,
-			resolveDir: process.cwd(),
-			sourcefile: "pi-browser-selective-smoke-entry.ts",
-		},
-		bundle: true,
-		platform: "browser",
-		format: "esm",
-		logLevel: "silent",
-		outfile: selectiveOutputPath,
-	});
+
+	const contributingInputs = new Set(
+		Object.values(agentTreeshakeBuild.metafile.outputs).flatMap((output) =>
+			Object.entries(output.inputs)
+				.filter(([, contribution]) => contribution.bytesInOutput > 0)
+				.map(([input]) => input),
+		),
+	);
+	const catalogInputs = Array.from(contributingInputs).filter((input) =>
+		normalizePath(input).includes("packages/ai/src/providers/data/"),
+	);
+	if (catalogInputs.length !== 1 || !normalizePath(catalogInputs[0]).endsWith("/anthropic.json")) {
+		throw new Error(
+			`Agent selective-provider bundle catalogs: expected only anthropic.json, found ${catalogInputs.join(", ") || "none"}`,
+		);
+	}
+
+	const aiSdkPackages = [
+		"@anthropic-ai/sdk",
+		"@aws-sdk/client-bedrock-runtime",
+		"@google/genai",
+		"@mistralai/mistralai",
+		"openai",
+	];
+	const includedAiSdkPackages = aiSdkPackages.filter((packageName) => includesNodePackage(inputs, packageName));
+	if (
+		includedAiSdkPackages.length !== 1 ||
+		includedAiSdkPackages[0] !== "@anthropic-ai/sdk"
+	) {
+		throw new Error(
+			`Agent selective-provider bundle SDKs: expected only @anthropic-ai/sdk, found ${includedAiSdkPackages.join(", ") || "none"}`,
+		);
+	}
+
 	process.exit(0);
 } catch (error) {
 	let detailedErrors = "";

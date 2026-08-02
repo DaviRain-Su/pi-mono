@@ -71,6 +71,7 @@ vim ~/.pi/agent/themes/my-theme.json
     "text": "",
     "thinkingText": "secondary",
     "selectedBg": "#2d2d30",
+    "scrollbarThumb": "#555566",
     "userMessageBg": "#2d2d30",
     "userMessageText": "",
     "customMessageBg": "#2d2d30",
@@ -109,6 +110,7 @@ vim ~/.pi/agent/themes/my-theme.json
     "thinkingMedium": "#00ffff",
     "thinkingHigh": "#ff00ff",
     "thinkingXhigh": "#ff0000",
+    "thinkingMax": "#ff0088",
     "bashMode": "#ffaa00"
   }
 }
@@ -139,13 +141,13 @@ vim ~/.pi/agent/themes/my-theme.json
 
 - `name` is required, must be unique, and must not contain `/`.
 - `vars` is optional. Define reusable colors here, then reference them in `colors`.
-- `colors` must define all 51 required tokens.
+- `colors` must define all 51 required tokens. `thinkingMax` is optional and falls back to `thinkingXhigh`; `scrollbarThumb` is optional and falls back to `selectedBg`.
 
 The `$schema` field enables editor auto-completion and validation.
 
 ## Color Tokens
 
-Every theme must define all 51 color tokens. There are no optional colors.
+Every theme must define all 51 required color tokens. `thinkingMax` and `scrollbarThumb` are optional for compatibility with existing themes; when omitted, they use `thinkingXhigh` and `selectedBg`, respectively.
 
 ### Core UI (11 colors)
 
@@ -163,11 +165,12 @@ Every theme must define all 51 color tokens. There are no optional colors.
 | `text` | Default text (usually `""`) |
 | `thinkingText` | Thinking block text |
 
-### Backgrounds & Content (11 colors)
+### Backgrounds & Content (11 required, 1 optional)
 
 | Token | Purpose |
 |-------|---------|
 | `selectedBg` | Selected line background |
+| `scrollbarThumb` | Fullscreen scrollbar thumb background; optional, falls back to `selectedBg` |
 | `userMessageBg` | User message background |
 | `userMessageText` | User message text |
 | `customMessageBg` | Extension message background |
@@ -216,7 +219,7 @@ Every theme must define all 51 color tokens. There are no optional colors.
 | `syntaxOperator` | Operators |
 | `syntaxPunctuation` | Punctuation |
 
-### Thinking Level Borders (6 colors)
+### Thinking Level Borders (6 required, 1 optional)
 
 Editor border colors indicating thinking level (visual hierarchy from subtle to prominent):
 
@@ -228,6 +231,7 @@ Editor border colors indicating thinking level (visual hierarchy from subtle to 
 | `thinkingMedium` | Medium thinking |
 | `thinkingHigh` | High thinking |
 | `thinkingXhigh` | Extra high thinking |
+| `thinkingMax` | Maximum thinking; optional, falls back to `thinkingXhigh` |
 
 ### Bash Mode (1 color)
 

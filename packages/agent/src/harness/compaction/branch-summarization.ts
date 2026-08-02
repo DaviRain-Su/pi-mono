@@ -1,4 +1,5 @@
-import { completeSimple, type Model } from "@earendil-works/pi-ai/base";
+import { contentText, type Model, type Models, type RetryCallbacks, type RetryPolicy } from "@earendil-works/pi-ai";
+
 import type { AgentMessage } from "../../types.ts";
 import {
 	convertToLlm,
@@ -8,7 +9,7 @@ import {
 } from "../messages.ts";
 import type { BranchSummaryResult, Session, SessionTreeEntry } from "../types.ts";
 import { BranchSummaryError, err, ok, type Result, SessionError } from "../types.ts";
-import { estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.ts";
+import { completeSimpleWithRetries, estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -48,12 +49,10 @@ export interface CollectEntriesResult {
 
 /** Options for generating a branch summary. */
 export interface GenerateBranchSummaryOptions {
+	/** Provider collection the summarization request goes through; owns auth resolution. */
+	models: Models;
 	/** Model used for summarization. */
 	model: Model<any>;
-	/** API key forwarded to the provider. */
-	apiKey: string;
-	/** Optional request headers forwarded to the provider. */
-	headers?: Record<string, string>;
 	/** Abort signal for the summarization request. */
 	signal: AbortSignal;
 	/** Optional instructions appended to or replacing the default prompt. */
@@ -62,6 +61,10 @@ export interface GenerateBranchSummaryOptions {
 	replaceInstructions?: boolean;
 	/** Tokens reserved for prompt and model output. Defaults to 16384. */
 	reserveTokens?: number;
+	/** Optional retry policy for transient summarization errors. */
+	retry?: RetryPolicy;
+	/** Optional callbacks for retry reporting. */
+	callbacks?: RetryCallbacks;
 }
 
 /** Collect entries that should be summarized before navigating to a different session tree entry. */
@@ -201,7 +204,16 @@ export async function generateBranchSummary(
 	entries: SessionTreeEntry[],
 	options: GenerateBranchSummaryOptions,
 ): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
-	const { model, apiKey, headers, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
+	const {
+		models,
+		model,
+		signal,
+		customInstructions,
+		replaceInstructions,
+		reserveTokens = 16384,
+		retry,
+		callbacks,
+	} = options;
 	const contextWindow = model.contextWindow || 128000;
 	const tokenBudget = contextWindow - reserveTokens;
 
@@ -229,10 +241,13 @@ export async function generateBranchSummary(
 			timestamp: Date.now(),
 		},
 	];
-	const response = await completeSimple(
+	const response = await completeSimpleWithRetries(
+		models,
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ apiKey, headers, signal, maxTokens: 2048 },
+		{ signal, maxTokens: 2048 },
+		retry,
+		callbacks,
 	);
 	if (response.stopReason === "aborted") {
 		return err(new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"));
@@ -246,16 +261,14 @@ export async function generateBranchSummary(
 		);
 	}
 
-	let summary = response.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
-		.map((c) => c.text)
-		.join("\n");
+	let summary = contentText(response.content);
 	summary = BRANCH_SUMMARY_PREAMBLE + summary;
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary += formatFileOperations(readFiles, modifiedFiles);
 
 	return ok({
 		summary: summary || "No summary generated",
+		usage: response.usage,
 		readFiles,
 		modifiedFiles,
 	});

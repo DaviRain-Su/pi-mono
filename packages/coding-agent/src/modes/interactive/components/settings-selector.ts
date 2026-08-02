@@ -4,6 +4,7 @@ import {
 	type Component,
 	Container,
 	getCapabilities,
+	type ScrollViewScrollbar,
 	type SelectItem,
 	SelectList,
 	type SelectListLayoutOptions,
@@ -13,7 +14,7 @@ import {
 	Text,
 } from "@earendil-works/pi-tui";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
-import type { DefaultProjectTrust, WarningSettings } from "../../../core/settings-manager.ts";
+import type { DefaultProjectTrust, UiMode, WarningSettings } from "../../../core/settings-manager.ts";
 import {
 	getSelectListTheme,
 	getSettingsListTheme,
@@ -35,7 +36,8 @@ const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 	low: "Light reasoning (~2k tokens)",
 	medium: "Moderate reasoning (~8k tokens)",
 	high: "Deep reasoning (~16k tokens)",
-	xhigh: "Maximum reasoning (~32k tokens)",
+	xhigh: "Extra-high reasoning (~32k tokens)",
+	max: "Maximum reasoning",
 };
 
 const DEFAULT_PROJECT_TRUST_LABELS: Record<DefaultProjectTrust, string> = {
@@ -65,17 +67,21 @@ export interface SettingsConfig {
 	terminalTheme: TerminalTheme;
 	availableThemes: string[];
 	hideThinkingBlock: boolean;
+	showCacheMissNotices: boolean;
 	collapseChangelog: boolean;
 	enableInstallTelemetry: boolean;
 	doubleEscapeAction: "fork" | "tree" | "none";
 	treeFilterMode: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
 	showHardwareCursor: boolean;
 	editorPaddingX: number;
+	outputPad: 0 | 1;
 	autocompleteMaxVisible: number;
 	quietStartup: boolean;
 	defaultProjectTrust: DefaultProjectTrust;
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
+	uiMode: UiMode;
+	fullscreenScrollbar: ScrollViewScrollbar;
 	warnings: WarningSettings;
 }
 
@@ -94,17 +100,21 @@ export interface SettingsCallbacks {
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
+	onShowCacheMissNoticesChange: (shown: boolean) => void;
 	onCollapseChangelogChange: (collapsed: boolean) => void;
 	onEnableInstallTelemetryChange: (enabled: boolean) => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
 	onTreeFilterModeChange: (mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all") => void;
 	onShowHardwareCursorChange: (enabled: boolean) => void;
 	onEditorPaddingXChange: (padding: number) => void;
+	onOutputPadChange: (padding: 0 | 1) => void;
 	onAutocompleteMaxVisibleChange: (maxVisible: number) => void;
 	onQuietStartupChange: (enabled: boolean) => void;
 	onDefaultProjectTrustChange: (defaultProjectTrust: DefaultProjectTrust) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
+	onUiModeChange: (mode: UiMode) => void;
+	onFullscreenScrollbarChange: (mode: ScrollViewScrollbar) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onCancel: () => void;
 }
@@ -520,6 +530,13 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "cache-miss-notices",
+				label: "Cache miss notices",
+				description: "Show transcript notices for significant prompt-cache misses",
+				currentValue: config.showCacheMissNotices ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "collapse-changelog",
 				label: "Collapse changelog",
 				description: "Show condensed changelog after updates",
@@ -599,6 +616,20 @@ export class SettingsSelectorComponent extends Container {
 					),
 			},
 			{
+				id: "ui-mode",
+				label: "UI mode",
+				description: "Interface layout used after restart; fullscreen mode is experimental",
+				currentValue: config.uiMode,
+				values: ["regular", "fullscreen"],
+			},
+			{
+				id: "fullscreen-scrollbar",
+				label: "Fullscreen scrollbar",
+				description: "Scrollbar behavior in fullscreen mode; has no effect in regular mode",
+				currentValue: config.fullscreenScrollbar,
+				values: ["auto", "always", "hidden"],
+			},
+			{
 				id: "theme",
 				label: "Theme",
 				description: "Color theme for the interface",
@@ -676,9 +707,19 @@ export class SettingsSelectorComponent extends Container {
 			values: ["0", "1", "2", "3"],
 		});
 
-		// Autocomplete max visible toggle (insert after editor-padding)
+		// Output padding toggle (insert after editor-padding)
 		const editorPaddingIndex = items.findIndex((item) => item.id === "editor-padding");
 		items.splice(editorPaddingIndex + 1, 0, {
+			id: "output-padding",
+			label: "Output padding",
+			description: "Horizontal padding for user messages, assistant messages, and thinking",
+			currentValue: String(config.outputPad),
+			values: ["0", "1"],
+		});
+
+		// Autocomplete max visible toggle (insert after output-padding)
+		const outputPaddingIndex = items.findIndex((item) => item.id === "output-padding");
+		items.splice(outputPaddingIndex + 1, 0, {
 			id: "autocomplete-max-visible",
 			label: "Autocomplete max items",
 			description: "Max visible items in autocomplete dropdown (3-20)",
@@ -752,6 +793,9 @@ export class SettingsSelectorComponent extends Container {
 					case "hide-thinking":
 						callbacks.onHideThinkingBlockChange(newValue === "true");
 						break;
+					case "cache-miss-notices":
+						callbacks.onShowCacheMissNoticesChange(newValue === "true");
+						break;
 					case "collapse-changelog":
 						callbacks.onCollapseChangelogChange(newValue === "true");
 						break;
@@ -782,6 +826,9 @@ export class SettingsSelectorComponent extends Container {
 					case "editor-padding":
 						callbacks.onEditorPaddingXChange(parseInt(newValue, 10));
 						break;
+					case "output-padding":
+						callbacks.onOutputPadChange(newValue === "0" ? 0 : 1);
+						break;
 					case "autocomplete-max-visible":
 						callbacks.onAutocompleteMaxVisibleChange(parseInt(newValue, 10));
 						break;
@@ -790,6 +837,12 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "terminal-progress":
 						callbacks.onShowTerminalProgressChange(newValue === "true");
+						break;
+					case "ui-mode":
+						callbacks.onUiModeChange(newValue as UiMode);
+						break;
+					case "fullscreen-scrollbar":
+						callbacks.onFullscreenScrollbarChange(newValue as ScrollViewScrollbar);
 						break;
 					case "theme":
 						callbacks.onThemeChange(newValue);

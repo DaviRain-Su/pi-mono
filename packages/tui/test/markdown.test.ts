@@ -4,7 +4,8 @@ import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Chalk } from "chalk";
 import { Markdown } from "../src/components/markdown.ts";
 import { resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.ts";
-import { type Component, TUI } from "../src/tui.ts";
+import type { Component, TUI } from "../src/tui.ts";
+import { TuiMainScreen } from "../src/tui-main-screen.ts";
 import { defaultMarkdownTheme } from "./test-themes.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
@@ -36,6 +37,44 @@ function stripAnsi(line: string): string {
 }
 
 describe("Markdown component", () => {
+	describe("Transforms", () => {
+		it("caches transformed Markdown by source and available width", () => {
+			const calls: Array<{ source: string; availableWidth: number }> = [];
+			const markdown = new Markdown("source", 2, 0, defaultMarkdownTheme, undefined, {
+				transform: (source, availableWidth) => {
+					calls.push({ source, availableWidth });
+					return `${source} ${availableWidth}`;
+				},
+			});
+
+			assert.deepStrictEqual(
+				markdown.render(80).map((line) => stripAnsi(line).trim()),
+				["source 76"],
+			);
+			markdown.render(80);
+			assert.deepStrictEqual(
+				markdown.render(60).map((line) => stripAnsi(line).trim()),
+				["source 56"],
+			);
+			assert.deepStrictEqual(calls, [
+				{ source: "source", availableWidth: 76 },
+				{ source: "source", availableWidth: 56 },
+			]);
+
+			markdown.setText("updated");
+			assert.deepStrictEqual(
+				markdown.render(60).map((line) => stripAnsi(line).trim()),
+				["updated 56"],
+			);
+			assert.deepStrictEqual(calls.at(-1), { source: "updated", availableWidth: 56 });
+
+			markdown.invalidate();
+			markdown.render(60);
+			assert.deepStrictEqual(calls.at(-1), { source: "updated", availableWidth: 56 });
+			assert.strictEqual(calls.length, 4);
+		});
+	});
+
 	describe("Lists", () => {
 		it("should render simple nested list", () => {
 			const markdown = new Markdown(
@@ -654,6 +693,26 @@ describe("Markdown component", () => {
 		});
 	});
 
+	describe("Backslash escapes", () => {
+		it("should normalize escaped punctuation by default", () => {
+			const markdown = new Markdown(String.raw`"\"`, 0, 0, defaultMarkdownTheme);
+
+			const lines = markdown.render(80).map((line) => stripAnsi(line).trimEnd());
+
+			assert.deepStrictEqual(lines, [`""`]);
+		});
+
+		it("should preserve source backslash escapes when configured", () => {
+			const markdown = new Markdown(String.raw`"\"`, 0, 0, defaultMarkdownTheme, undefined, {
+				preserveBackslashEscapes: true,
+			});
+
+			const lines = markdown.render(80).map((line) => stripAnsi(line).trimEnd());
+
+			assert.deepStrictEqual(lines, [String.raw`"\"`]);
+		});
+	});
+
 	describe("Pre-styled text (thinking traces)", () => {
 		it("should preserve gray italic styling after inline code", () => {
 			// This replicates how thinking content is rendered in assistant-message.ts
@@ -735,7 +794,7 @@ describe("Markdown component", () => {
 			});
 
 			const terminal = new VirtualTerminal(80, 6);
-			const tui = new TUI(terminal);
+			const tui: TUI = new TuiMainScreen(terminal);
 			const component = new MarkdownWithInput(markdown);
 			tui.addChild(component);
 			tui.start();
@@ -1176,7 +1235,7 @@ bar`,
 		it("should not leak h1 underline into padding when inline code is the last token", async () => {
 			const markdown = new Markdown("# Important distinction from `open()`", 0, 0, defaultMarkdownTheme);
 			const terminal = new VirtualTerminal(80, 4);
-			const tui = new TUI(terminal);
+			const tui: TUI = new TuiMainScreen(terminal);
 			tui.addChild(markdown);
 			tui.start();
 			await terminal.waitForRender();

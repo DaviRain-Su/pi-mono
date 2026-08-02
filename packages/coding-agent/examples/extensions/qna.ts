@@ -7,7 +7,7 @@
  * 3. Loads the result into the editor for user to fill in answers
  */
 
-import { complete, type UserMessage } from "@earendil-works/pi-ai";
+import type { UserMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 
@@ -87,10 +87,10 @@ export default function (pi: ExtensionAPI) {
 						timestamp: Date.now(),
 					};
 
-					const response = await complete(
+					const response = await ctx.modelRegistry.complete(
 						ctx.model!,
 						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-						{ apiKey: auth.apiKey, headers: auth.headers, signal: loader.signal },
+						{ apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: loader.signal },
 					);
 
 					if (response.stopReason === "aborted") {

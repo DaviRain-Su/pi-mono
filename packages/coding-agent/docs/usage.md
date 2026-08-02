@@ -11,7 +11,7 @@ The interface has four main areas:
 - **Startup header** - shortcuts, loaded context files, prompt templates, skills, and extensions
 - **Messages** - user messages, assistant responses, tool calls, tool results, notifications, errors, and extension UI
 - **Editor** - where you type; border color indicates the current thinking level
-- **Footer** - working directory, session name, token/cache usage, cost, context usage, and current model
+- **Footer** - working directory, session name, token/cache usage, cost, context usage, and current model. Totals include assistant responses, usage reported by tools, and summary generation.
 
 The editor can be replaced temporarily by built-in UI such as `/settings` or by custom extension UI.
 
@@ -22,10 +22,11 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 | File reference | Type `@` to fuzzy-search project files |
 | Path completion | Press Tab to complete paths |
 | Multi-line input | Shift+Enter, or Ctrl+Enter on Windows Terminal |
+| Copy response | Ctrl+X copies the last assistant message; in `/tree`, it copies the selected message |
 | Images | Paste with Ctrl+V, Alt+V on Windows, or drag into the terminal |
 | Shell command | `!command` runs and sends output to the model |
 | Hidden shell command | `!!command` runs without sending output to the model |
-| External editor | Ctrl+G opens `$VISUAL` or `$EDITOR` |
+| External editor | Ctrl+G opens `externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere |
 
 See [Keybindings](keybindings.md) for all shortcuts and customization.
 
@@ -36,6 +37,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | Command | Description |
 |---------|-------------|
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
+| [`/llama`](llama-cpp.md) | Download, load, and unload llama.cpp router models |
 | `/model` | Switch models |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Thinking level, theme, message delivery, transport |
@@ -44,13 +46,15 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/name <name>` | Set session display name |
 | `/session` | Show session file, ID, messages, tokens, and cost |
 | `/tree` | Jump to any point in the session and continue from there |
+| `/trust` | Save project trust decision for future sessions |
 | `/fork` | Create a new session from a previous user message |
 | `/clone` | Duplicate the current active branch into a new session |
 | `/compact [prompt]` | Manually compact context, optionally with custom instructions |
 | `/copy` | Copy last assistant message to clipboard |
-| `/export [file]` | Export session to HTML |
+| `/export [file]` | Export session to HTML or JSONL |
+| `/import <file>` | Import and resume a session from a JSONL file |
 | `/share` | Upload as private GitHub gist with shareable HTML link |
-| `/reload` | Reload keybindings, extensions, skills, prompts, and context files |
+| `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
 | `/quit` | Quit pi |
@@ -148,6 +152,7 @@ pi uninstall <source> [-l]   # Alias for remove
 pi update [source|self|pi]   # Update pi only, or one package source
 pi update --all              # Update pi and packages; reconcile pinned git refs
 pi update --extensions       # Update packages only; reconcile pinned git refs
+pi update --models           # Refresh model catalogs only
 pi update --self             # Update pi only
 pi update --extension <src>  # Update one package
 pi list                      # List installed packages
@@ -181,7 +186,7 @@ cat README.md | pi -p "Summarize this text"
 | `--provider <name>` | Provider, such as `anthropic`, `openai`, or `google` |
 | `--model <pattern>` | Model pattern or ID; supports `provider/id` and optional `:<thinking>` |
 | `--api-key <key>` | API key, overriding environment variables |
-| `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
+| `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
 | `--list-models [search]` | List available models |
 
@@ -234,11 +239,16 @@ pi --no-extensions -e ./my-extension.ts
 |--------|-------------|
 | `--system-prompt <text>` | Replace default prompt; context files and skills are still appended |
 | `--append-system-prompt <text>` | Append to system prompt |
+| `--ui-mode <mode>` | UI mode: `regular` (default) or experimental `fullscreen` |
 | `--verbose` | Force verbose startup |
 | `-a`, `--approve` | Trust project-local files for this run |
 | `-na`, `--no-approve` | Ignore project-local files for this run |
 | `-h`, `--help` | Show help |
 | `-v`, `--version` | Show version |
+
+In `fullscreen` mode, the transcript scrolls inside the terminal viewport while queued messages, working status, extension widgets, editor, and footer remain fixed at the bottom. Mouse/trackpad input scrolls the region under the pointer; keyboard viewport actions always remain available. Inline images work in terminals that support the Kitty graphics protocol, including Kitty and Ghostty. In iTerm2 they render as text placeholders because its inline-image protocol cannot delete or crop placements during application-owned scrolling. In `regular` mode, pi uses the main screen and terminal-owned scrollback, and iTerm2 inline images continue to render normally.
+
+To use fullscreen mode by default, set **UI mode** to `fullscreen` in `/settings`. The change applies after restarting pi.
 
 ### File Arguments
 
@@ -283,19 +293,6 @@ pi --tools read,grep,find,ls -p "Review the code"
 # Disable one extension or built-in tool while keeping the rest available
 pi --exclude-tools ask_question
 ```
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `PI_CODING_AGENT_DIR` | Override config directory; default is `~/.pi/agent` |
-| `PI_CODING_AGENT_SESSION_DIR` | Override session storage directory; overridden by `--session-dir` |
-| `PI_PACKAGE_DIR` | Override package directory, useful for Nix/Guix store paths |
-| `PI_OFFLINE` | Disable startup network operations, including update checks, package update checks, and install/update telemetry |
-| `PI_SKIP_VERSION_CHECK` | Skip the Pi version update check at startup. This prevents the `pi.dev` latest-version request |
-| `PI_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no`. This does not disable update checks |
-| `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache where supported |
-| `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
 ## Design Principles
 

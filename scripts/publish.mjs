@@ -7,6 +7,9 @@ import { join } from "node:path";
 const packages = [
 	{ directory: "packages/ai", name: "@earendil-works/pi-ai" },
 	{ directory: "packages/agent", name: "@earendil-works/pi-agent-core" },
+	{ directory: "packages/protocol", name: "@earendil-works/pi-protocol" },
+	{ directory: "packages/client", name: "@earendil-works/pi-client" },
+	{ directory: "packages/storage/sqlite-node", name: "@earendil-works/pi-storage-sqlite-node" },
 	{ directory: "packages/tui", name: "@earendil-works/pi-tui" },
 	{ directory: "packages/coding-agent", name: "@earendil-works/pi-coding-agent" },
 ];
@@ -89,24 +92,34 @@ if (versions.length !== 1) {
 
 console.log(`Publishing pi packages at ${versions[0]}${dryRun ? " (dry run)" : ""}\n`);
 
-for (const pkg of packages) {
-	const version = packageVersions.get(pkg.name);
+const packageStates = packages.map((pkg) => ({
+	...pkg,
+	published: false,
+	version: packageVersions.get(pkg.name),
+}));
+
+for (const pkg of packageStates) {
 	assertBuildOutputExists(pkg.directory);
-	const published = isPublished(pkg.name, version);
+	pkg.published = isPublished(pkg.name, pkg.version);
 
-	if (dryRun) {
-		if (published) {
-			console.log(`${pkg.name}@${version} is already published; validating package contents only.`);
-		} else {
-			console.log(`${pkg.name}@${version} is not published; validating package contents before publish.`);
-		}
-		validatePack(pkg.directory);
-		console.log();
-		continue;
+	if (pkg.published) {
+		console.log(`${pkg.name}@${pkg.version} is already published; validating package contents only.`);
+	} else {
+		console.log(`${pkg.name}@${pkg.version} is not published; validating package contents before publish.`);
 	}
+	validatePack(pkg.directory);
+	console.log();
+}
 
-	if (published) {
-		console.log(`Skipping ${pkg.name}@${version}: already published\n`);
+if (dryRun) {
+	process.exit(0);
+}
+
+console.log("All packages validated; starting publication.\n");
+
+for (const pkg of packageStates) {
+	if (pkg.published) {
+		console.log(`Skipping ${pkg.name}@${pkg.version}: already published\n`);
 		continue;
 	}
 

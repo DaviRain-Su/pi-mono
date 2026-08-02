@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { getModel } from "../src/compat.ts";
 import { findEnvKeys, getEnvApiKey } from "../src/env-api-keys.ts";
-import { getModel } from "../src/models.ts";
 
 const originalTogetherApiKey = process.env.TOGETHER_API_KEY;
 
@@ -44,7 +44,15 @@ describe("Together models", () => {
 
 	it("models Together reasoning controls from the Together API surface", () => {
 		const gptOss = getModel("together", "openai/gpt-oss-120b");
-		expect(gptOss.thinkingLevelMap).toEqual({ off: null, minimal: null });
+		expect(gptOss.thinkingLevelMap).toEqual({
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: "medium",
+			high: "high",
+			max: null,
+			xhigh: null,
+		});
 		expect(gptOss.compat).toMatchObject({
 			supportsReasoningEffort: true,
 			thinkingFormat: "openai",

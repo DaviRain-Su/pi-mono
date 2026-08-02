@@ -1,20 +1,28 @@
-import { fauxAssistantMessage, fauxToolCall, registerFauxProvider, type StreamOptions } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+	createModels,
+	type FauxProviderHandle,
+	fauxAssistantMessage,
+	fauxProvider,
+	fauxToolCall,
+	type StreamOptions,
+} from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
 import { AgentHarness } from "../../src/harness/agent-harness.ts";
-import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
-import { InMemorySessionStorage } from "../../src/harness/session/memory-storage.ts";
-import { Session } from "../../src/harness/session/session.ts";
+import type { AgentHarnessOptions } from "../../src/harness/types.ts";
 import { calculateTool } from "../utils/calculate.ts";
+import { createInMemorySession } from "./session-test-utils.ts";
 
-const registrations: Array<{ unregister(): void }> = [];
+/** Shared collection; each faux provider gets a unique id so coexisting fakes route correctly. */
+const models = createModels();
+let fauxCount = 0;
 
-afterEach(() => {
-	for (const registration of registrations.splice(0)) {
-		registration.unregister();
-	}
-});
+function newFaux(): FauxProviderHandle {
+	const faux = fauxProvider({ provider: `faux-${++fauxCount}` });
+	models.setProvider(faux.provider);
+	return faux;
+}
 
-function createHarness(options: ConstructorParameters<typeof AgentHarness>[0]): AgentHarness {
+function createHarness(options: AgentHarnessOptions): AgentHarness {
 	return new AgentHarness(options);
 }
 
@@ -27,10 +35,9 @@ function captureOptions(options: StreamOptions | undefined): StreamOptions {
 }
 
 describe("AgentHarness stream configuration", () => {
-	it("snapshots stream options and merges auth headers before provider request hooks", async () => {
+	it("snapshots stream options before provider request hooks", async () => {
 		let capturedOptions: StreamOptions | undefined;
-		const registration = registerFauxProvider();
-		registrations.push(registration);
+		const registration = newFaux();
 		registration.setResponses([
 			(_context, options) => {
 				capturedOptions = options;
@@ -38,9 +45,9 @@ describe("AgentHarness stream configuration", () => {
 			},
 		]);
 
-		const session = new Session(new InMemorySessionStorage({ metadata: { id: "session-1", createdAt: "now" } }));
+		const session = await createInMemorySession("session-1");
 		const harness = createHarness({
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			models,
 			session,
 			model: registration.getModel(),
 			streamOptions: {
@@ -51,12 +58,11 @@ describe("AgentHarness stream configuration", () => {
 				metadata: { base: true },
 				cacheRetention: "none",
 			},
-			getApiKeyAndHeaders: async () => ({ apiKey: "secret", headers: { "x-auth": "auth" } }),
 		});
 
 		harness.on("before_provider_request", (event) => {
 			expect(event.sessionId).toBe("session-1");
-			expect(event.streamOptions.headers).toEqual({ "x-base": "base", "x-auth": "auth" });
+			expect(event.streamOptions.headers).toEqual({ "x-base": "base" });
 			return {
 				streamOptions: {
 					headers: { "x-hook": "hook" },
@@ -68,21 +74,19 @@ describe("AgentHarness stream configuration", () => {
 		await harness.prompt("hello");
 
 		expect(capturedOptions).toMatchObject({
-			apiKey: "secret",
 			timeoutMs: 1000,
 			maxRetries: 2,
 			maxRetryDelayMs: 3000,
 			sessionId: "session-1",
 			cacheRetention: "none",
 		});
-		expect(capturedOptions?.headers).toEqual({ "x-base": "base", "x-auth": "auth", "x-hook": "hook" });
+		expect(capturedOptions?.headers).toEqual({ "x-base": "base", "x-hook": "hook" });
 		expect(capturedOptions?.metadata).toEqual({ base: true, hook: true });
 	});
 
 	it("chains provider request patches and supports deletion semantics", async () => {
 		let capturedOptions: StreamOptions | undefined;
-		const registration = registerFauxProvider();
-		registrations.push(registration);
+		const registration = newFaux();
 		registration.setResponses([
 			(_context, options) => {
 				capturedOptions = options;
@@ -91,8 +95,8 @@ describe("AgentHarness stream configuration", () => {
 		]);
 
 		const harness = createHarness({
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
-			session: new Session(new InMemorySessionStorage()),
+			models,
+			session: await createInMemorySession(),
 			model: registration.getModel(),
 			streamOptions: {
 				timeoutMs: 1000,
@@ -133,8 +137,7 @@ describe("AgentHarness stream configuration", () => {
 
 	it("uses updated stream options for save-point snapshots without mutating the active request", async () => {
 		const capturedOptions: StreamOptions[] = [];
-		const registration = registerFauxProvider();
-		registrations.push(registration);
+		const registration = newFaux();
 		registration.setResponses([
 			(_context, options) => {
 				capturedOptions.push(captureOptions(options));
@@ -149,8 +152,8 @@ describe("AgentHarness stream configuration", () => {
 		]);
 
 		const harness = createHarness({
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
-			session: new Session(new InMemorySessionStorage()),
+			models,
+			session: await createInMemorySession(),
 			model: registration.getModel(),
 			tools: [calculateTool],
 			streamOptions: { timeoutMs: 1000, headers: { turn: "first" } },
@@ -174,8 +177,7 @@ describe("AgentHarness stream configuration", () => {
 	it("chains provider payload hooks", async () => {
 		const seenPayloads: unknown[] = [];
 		let finalPayload: unknown;
-		const registration = registerFauxProvider();
-		registrations.push(registration);
+		const registration = newFaux();
 		registration.setResponses([
 			async (_context, options, _state, model) => {
 				finalPayload = await options?.onPayload?.({ steps: ["provider"] }, model);
@@ -184,8 +186,8 @@ describe("AgentHarness stream configuration", () => {
 		]);
 
 		const harness = createHarness({
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
-			session: new Session(new InMemorySessionStorage()),
+			models,
+			session: await createInMemorySession(),
 			model: registration.getModel(),
 		});
 

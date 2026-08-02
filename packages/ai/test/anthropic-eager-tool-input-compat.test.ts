@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { streamAnthropic } from "../src/providers/anthropic.ts";
+import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import type { Context, Model, Tool } from "../src/types.ts";
 
 interface CapturedRequest {
@@ -30,6 +30,17 @@ const tool: Tool = {
 	name: "lookup",
 	description: "Look up a value",
 	parameters: Type.Object({ value: Type.String() }),
+};
+
+const schemaCompatibilityTool: Tool = {
+	...tool,
+	parameters: Type.Object({ value: Type.String() }, { additionalProperties: false, title: "LookupInput" }),
+};
+
+const strictTool: Tool = {
+	...tool,
+	parameters: Type.Object({ value: Type.String() }, { additionalProperties: false, title: "StrictLookupInput" }),
+	constrainedSampling: { type: "json_schema", strict: "prefer" },
 };
 
 function createContext(tools: Tool[] = [tool]): Context {
@@ -98,6 +109,14 @@ function getFirstTool(body: Record<string, unknown>): Record<string, unknown> {
 	return tools[0] as Record<string, unknown>;
 }
 
+function getFirstToolInputSchema(body: Record<string, unknown>): Record<string, unknown> {
+	const inputSchema = getFirstTool(body).input_schema;
+	if (typeof inputSchema !== "object" || inputSchema === null || Array.isArray(inputSchema)) {
+		throw new Error("Expected first tool input schema in request body");
+	}
+	return inputSchema as Record<string, unknown>;
+}
+
 describe("Anthropic eager tool input streaming compatibility", () => {
 	it("sends per-tool eager_input_streaming by default", async () => {
 		const request = await captureAnthropicRequest(undefined, createContext());
@@ -118,5 +137,25 @@ describe("Anthropic eager tool input streaming compatibility", () => {
 
 		expect(request.body.tools).toBeUndefined();
 		expect(request.headers["anthropic-beta"]).toBeUndefined();
+	});
+
+	it("only sends the full input schema for strict JSON-schema tools", async () => {
+		const legacyRequest = await captureAnthropicRequest(
+			{ supportsStrictTools: true },
+			createContext([schemaCompatibilityTool]),
+		);
+		const parameters = schemaCompatibilityTool.parameters as { properties?: unknown; required?: unknown };
+		expect(getFirstToolInputSchema(legacyRequest.body)).toEqual({
+			type: "object",
+			properties: parameters.properties,
+			required: parameters.required,
+		});
+
+		const strictRequest = await captureAnthropicRequest({ supportsStrictTools: true }, createContext([strictTool]));
+		expect(getFirstTool(strictRequest.body).strict).toBe(true);
+		expect(getFirstToolInputSchema(strictRequest.body)).toMatchObject({
+			additionalProperties: false,
+			title: "StrictLookupInput",
+		});
 	});
 });

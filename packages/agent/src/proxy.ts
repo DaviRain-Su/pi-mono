@@ -14,7 +14,7 @@ import {
 	type SimpleStreamOptions,
 	type StopReason,
 	type ToolCall,
-} from "@earendil-works/pi-ai/base";
+} from "@earendil-works/pi-ai";
 
 // Create stream class matching ProxyMessageEventStream
 class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
@@ -120,7 +120,7 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 		// Initialize the partial message that we'll build up from events
 		const partial: AssistantMessage = {
 			role: "assistant",
-			stopReason: "stop",
+			stopReason: "pending",
 			content: [],
 			api: model.api,
 			provider: model.provider,

@@ -39,6 +39,13 @@ export interface Keybindings {
 	"tui.select.pageDown": true;
 	"tui.select.confirm": true;
 	"tui.select.cancel": true;
+	// Alternate-screen viewport navigation
+	"tui.altScreen.pageUp": true;
+	"tui.altScreen.pageDown": true;
+	"tui.altScreen.previousPrompt": true;
+	"tui.altScreen.nextPrompt": true;
+	"tui.altScreen.top": true;
+	"tui.altScreen.bottom": true;
 }
 
 export type Keybinding = keyof Keybindings;
@@ -115,7 +122,7 @@ export const TUI_KEYBINDINGS = {
 	"tui.editor.yank": { defaultKeys: "ctrl+y", description: "Yank" },
 	"tui.editor.yankPop": { defaultKeys: "alt+y", description: "Yank pop" },
 	"tui.editor.undo": { defaultKeys: "ctrl+-", description: "Undo" },
-	"tui.input.newLine": { defaultKeys: "shift+enter", description: "Insert newline" },
+	"tui.input.newLine": { defaultKeys: ["shift+enter", "ctrl+j"], description: "Insert newline" },
 	"tui.input.submit": { defaultKeys: "enter", description: "Submit input" },
 	"tui.input.tab": { defaultKeys: "tab", description: "Tab / autocomplete" },
 	"tui.input.copy": { defaultKeys: "ctrl+c", description: "Copy selection" },
@@ -131,6 +138,24 @@ export const TUI_KEYBINDINGS = {
 		defaultKeys: ["escape", "ctrl+c"],
 		description: "Cancel selection",
 	},
+	"tui.altScreen.pageUp": {
+		defaultKeys: "pageUp",
+		description: "Scroll viewport up one page",
+	},
+	"tui.altScreen.pageDown": {
+		defaultKeys: "pageDown",
+		description: "Scroll viewport down one page",
+	},
+	"tui.altScreen.previousPrompt": {
+		defaultKeys: "ctrl+shift+up",
+		description: "Jump to previous semantic prompt",
+	},
+	"tui.altScreen.nextPrompt": {
+		defaultKeys: "ctrl+shift+down",
+		description: "Jump to next semantic prompt",
+	},
+	"tui.altScreen.top": { defaultKeys: "home", description: "Scroll viewport to top" },
+	"tui.altScreen.bottom": { defaultKeys: "end", description: "Scroll viewport to bottom" },
 } as const satisfies KeybindingDefinitions;
 
 export interface KeybindingConflict {

@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stream } from "../src/index.ts";
+import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
+import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
+import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";
+import { getModel, stream } from "../src/compat.ts";
 import { MODELS } from "../src/models.generated.ts";
-import { getModel } from "../src/models.ts";
-import { streamAnthropic } from "../src/providers/anthropic.ts";
-import { streamOpenAICompletions } from "../src/providers/openai-completions.ts";
-import { streamOpenAIResponses } from "../src/providers/openai-responses.ts";
 import type { Context, Model } from "../src/types.ts";
 
 class PayloadCaptured extends Error {
@@ -17,6 +16,10 @@ class PayloadCaptured extends Error {
 interface OpenAICompletionsCachePayload {
 	prompt_cache_key?: string;
 	prompt_cache_retention?: string;
+}
+
+interface OpenAIResponsesCachePayload extends OpenAICompletionsCachePayload {
+	prompt_cache_options?: { mode: "explicit" };
 }
 
 function stopAfterPayload<TPayload>(capture: (payload: TPayload) => void): (payload: unknown) => never {
@@ -342,16 +345,16 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 			expect(capturedPayload.prompt_cache_retention).toBeUndefined();
 		});
 
-		it("should omit prompt_cache_key when cacheRetention is none", async () => {
-			const model = getModel("openai", "gpt-4o-mini");
-			let capturedPayload: any = null;
+		it("should omit prompt_cache_key and disable implicit writes when cacheRetention is none", async () => {
+			const model = getModel("openai", "gpt-5.6-sol");
+			let capturedPayload: OpenAIResponsesCachePayload | undefined;
 
 			try {
 				const s = streamOpenAIResponses(model, context, {
 					apiKey: "fake-key",
 					cacheRetention: "none",
 					sessionId: "session-1",
-					onPayload: stopAfterPayload((payload) => {
+					onPayload: stopAfterPayload<OpenAIResponsesCachePayload>((payload) => {
 						capturedPayload = payload;
 					}),
 				});
@@ -363,9 +366,36 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 				// Expected to fail
 			}
 
-			expect(capturedPayload).not.toBeNull();
-			expect(capturedPayload.prompt_cache_key).toBeUndefined();
-			expect(capturedPayload.prompt_cache_retention).toBeUndefined();
+			expect(capturedPayload).toBeDefined();
+			expect(capturedPayload?.prompt_cache_key).toBeUndefined();
+			expect(capturedPayload?.prompt_cache_retention).toBeUndefined();
+			expect(capturedPayload?.prompt_cache_options).toEqual({ mode: "explicit" });
+		});
+
+		it("should omit prompt_cache_options for models that reject it", async () => {
+			const model = getModel("openai", "gpt-4o-mini");
+			let capturedPayload: OpenAIResponsesCachePayload | undefined;
+
+			try {
+				const s = streamOpenAIResponses(model, context, {
+					apiKey: "fake-key",
+					cacheRetention: "none",
+					sessionId: "session-1",
+					onPayload: stopAfterPayload<OpenAIResponsesCachePayload>((payload) => {
+						capturedPayload = payload;
+					}),
+				});
+
+				for await (const event of s) {
+					if (event.type === "error") break;
+				}
+			} catch {
+				// Expected to fail
+			}
+
+			expect(capturedPayload).toBeDefined();
+			expect(capturedPayload?.prompt_cache_key).toBeUndefined();
+			expect(capturedPayload?.prompt_cache_options).toBeUndefined();
 		});
 
 		it("should set prompt_cache_retention when cacheRetention is long", async () => {

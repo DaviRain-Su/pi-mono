@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { streamSimple } from "../src/index.ts";
-import { getModel } from "../src/models.ts";
+import { getModel, streamSimple } from "../src/compat.ts";
 import type { Context, Model, SimpleStreamOptions } from "../src/types.ts";
 
 interface AnthropicThinkingPayload {
@@ -89,6 +88,20 @@ describe("Anthropic forceAdaptiveThinking compat override", () => {
 		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
 		expect(payload.output_config).toEqual({ effort: "xhigh" });
 	});
+
+	it.each([
+		["kimi-for-coding", "medium", "medium"],
+		["k3", "max", "max"],
+		["kimi-for-coding-highspeed", "medium", "medium"],
+	] as const)(
+		"uses adaptive thinking effort without a token budget for Kimi Coding %s",
+		async (modelId, reasoning, effort) => {
+			const payload = await capturePayload(getModel("kimi-coding", modelId), { reasoning });
+
+			expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+			expect(payload.output_config).toEqual({ effort });
+		},
+	);
 
 	it("allows built-in adaptive models to opt out with compat.forceAdaptiveThinking false", async () => {
 		const model: Model<"anthropic-messages"> = {

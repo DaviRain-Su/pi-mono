@@ -6,6 +6,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
+import type { UiMode } from "../core/settings-manager.ts";
 
 export type Mode = "text" | "json" | "rpc";
 
@@ -45,6 +46,7 @@ export interface Args {
 	noContextFiles?: boolean;
 	listModels?: string | true;
 	offline?: boolean;
+	uiMode?: UiMode;
 	verbose?: boolean;
 	projectTrustOverride?: boolean;
 	messages: string[];
@@ -54,7 +56,7 @@ export interface Args {
 	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
 }
 
-const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export function isValidThinkingLevel(level: string): level is ThinkingLevel {
 	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
@@ -175,6 +177,22 @@ export function parseArgs(args: string[]): Args {
 			} else {
 				result.listModels = true;
 			}
+		} else if (arg === "--ui-mode") {
+			const mode = args[i + 1];
+			if (mode === "regular" || mode === "fullscreen") {
+				result.uiMode = mode;
+				i++;
+			} else if (mode === undefined || mode.startsWith("-")) {
+				result.diagnostics.push({ type: "error", message: "--ui-mode requires regular or fullscreen" });
+			} else {
+				i++;
+				result.diagnostics.push({
+					type: "error",
+					message: `Invalid UI mode "${mode}". Valid values: regular, fullscreen`,
+				});
+			}
+		} else if (arg === "--alt") {
+			result.uiMode = "fullscreen";
 		} else if (arg === "--verbose") {
 			result.verbose = true;
 		} else if (arg === "--approve" || arg === "-a") {
@@ -229,10 +247,11 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} install <source> [-l]     Install extension source and add to settings
   ${APP_NAME} remove <source> [-l]      Remove extension source from settings
   ${APP_NAME} uninstall <source> [-l]   Alias for remove
-  ${APP_NAME} update [source|self|pi]   Update pi (use --all for pi and extensions)
+  ${APP_NAME} update [source|self|pi]   Update pi, extensions, or model catalogs
   ${APP_NAME} list                      List installed extensions from settings
-  ${APP_NAME} config                    Open TUI to enable/disable package resources
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list
+  ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
+  ${APP_NAME} auth <command>            Print credentials for external clients
+  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: google)
@@ -258,7 +277,7 @@ ${chalk.bold("Options:")}
                                  Applies to built-in, extension, and custom tools
   --exclude-tools, -xt <tools>   Comma-separated denylist of tool names to disable
                                  Applies to built-in, extension, and custom tools
-  --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh
+  --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh, max
   --extension, -e <path>         Load an extension file (can be used multiple times)
   --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
   --skill <path>                 Load a skill file or directory (can be used multiple times)
@@ -271,6 +290,7 @@ ${chalk.bold("Options:")}
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)
+  --ui-mode <mode>               UI mode: regular (default) or fullscreen
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
   --offline                      Disable startup network operations (same as PI_OFFLINE=1)
@@ -280,6 +300,12 @@ ${chalk.bold("Options:")}
 Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
 
 ${chalk.bold("Examples:")}
+  # Print a provider API key for an external client
+  ${APP_NAME} auth print-api-key --provider openai --model gpt-5.5
+
+  # Print an OAuth bearer token for an external client (refreshes if expired)
+  ${APP_NAME} auth print-bearer-token --provider openai-codex --model gpt-5.5
+
   # Interactive mode
   ${APP_NAME}
 
@@ -333,6 +359,7 @@ ${chalk.bold("Examples:")}
   ${APP_NAME} --export session.jsonl output.html
 
 ${chalk.bold("Environment Variables:")}
+  ANTHROPIC_AUTH_TOKEN             - Anthropic bearer auth token
   ANTHROPIC_API_KEY                - Anthropic Claude API key
   ANTHROPIC_OAUTH_TOKEN            - Anthropic OAuth token (alternative to API key)
   ANT_LING_API_KEY                 - Ant Ling API key
@@ -352,7 +379,7 @@ ${chalk.bold("Environment Variables:")}
   TOGETHER_API_KEY                 - Together AI API key
   OPENROUTER_API_KEY               - OpenRouter API key
   AI_GATEWAY_API_KEY               - Vercel AI Gateway API key
-  ZAI_API_KEY                      - ZAI API key
+  ZAI_API_KEY                      - ZAI Coding Plan API key (Global)
   ZAI_CODING_CN_API_KEY            - ZAI Coding Plan API key (China)
   MISTRAL_API_KEY                  - Mistral API key
   MINIMAX_API_KEY                  - MiniMax API key
@@ -362,6 +389,8 @@ ${chalk.bold("Environment Variables:")}
   CLOUDFLARE_API_KEY               - Cloudflare API token (Workers AI and AI Gateway)
   CLOUDFLARE_ACCOUNT_ID            - Cloudflare account id (required for both)
   CLOUDFLARE_GATEWAY_ID            - Cloudflare AI Gateway slug (required for AI Gateway)
+  QWEN_TOKEN_PLAN_API_KEY          - Qwen Token Plan API key (international region)
+  QWEN_TOKEN_PLAN_CN_API_KEY       - Qwen Token Plan API key (China region)
   XIAOMI_API_KEY                   - Xiaomi MiMo API key (api.xiaomimimo.com billing)
   XIAOMI_TOKEN_PLAN_CN_API_KEY     - Xiaomi MiMo Token Plan API key (China region)
   XIAOMI_TOKEN_PLAN_AMS_API_KEY    - Xiaomi MiMo Token Plan API key (Amsterdam region)

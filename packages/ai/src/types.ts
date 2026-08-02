@@ -1,3 +1,13 @@
+import type { AnthropicOptions } from "./api/anthropic-messages.ts";
+import type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
+import type { BedrockOptions } from "./api/bedrock-converse-stream.ts";
+import type { GoogleOptions } from "./api/google-generative-ai.ts";
+import type { GoogleVertexOptions } from "./api/google-vertex.ts";
+import type { MistralOptions } from "./api/mistral-conversations.ts";
+import type { OpenAICodexResponsesOptions } from "./api/openai-codex-responses.ts";
+import type { OpenAICompletionsOptions } from "./api/openai-completions.ts";
+import type { OpenAIResponsesOptions } from "./api/openai-responses.ts";
+import type { PiMessagesOptions } from "./api/pi-messages.ts";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.ts";
 import type { AssistantMessageEventStream } from "./utils/event-stream.ts";
 
@@ -12,7 +22,8 @@ export type KnownApi =
 	| "anthropic-messages"
 	| "bedrock-converse-stream"
 	| "google-generative-ai"
-	| "google-vertex";
+	| "google-vertex"
+	| "pi-messages";
 
 export type Api = KnownApi | (string & {});
 
@@ -29,6 +40,7 @@ export type KnownProvider =
 	| "openai"
 	| "azure-openai-responses"
 	| "openai-codex"
+	| "radius"
 	| "nvidia"
 	| "deepseek"
 	| "github-copilot"
@@ -53,17 +65,19 @@ export type KnownProvider =
 	| "kimi-code-openai"
 	| "cloudflare-workers-ai"
 	| "cloudflare-ai-gateway"
+	| "qwen-token-plan"
+	| "qwen-token-plan-cn"
 	| "xiaomi"
 	| "xiaomi-token-plan-cn"
 	| "xiaomi-token-plan-ams"
 	| "xiaomi-token-plan-sgp";
-export type Provider = KnownProvider | string;
+export type ProviderId = KnownProvider | string;
 
 export type KnownImagesProvider = "openrouter";
 
-export type ImagesProvider = KnownImagesProvider | string;
+export type ImagesProviderId = KnownImagesProvider | string;
 
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ModelThinkingLevel = "off" | ThinkingLevel;
 export type ThinkingLevelMap = Partial<Record<ModelThinkingLevel, string | null>>;
 export type ChatTemplateKwargValue =
@@ -91,6 +105,9 @@ export type Transport = "sse" | "websocket" | "websocket-cached" | "auto";
 
 /** Provider-scoped environment overrides. Values take precedence over process.env. */
 export type ProviderEnv = Record<string, string>;
+export type ProviderHeaders = Record<string, string | null>;
+export type FetchFunction = typeof globalThis.fetch;
+export type SessionAffinityFormat = "openai" | "openai-nosession" | "openrouter";
 
 export interface ProviderResponse {
 	status: number;
@@ -102,6 +119,12 @@ export interface StreamOptions {
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;
+	/**
+	 * Optional fetch implementation for provider HTTP requests.
+	 * Defaults to `globalThis.fetch`. Provider adapters that cannot inject a custom implementation may reject it.
+	 * This does not affect WebSocket transports.
+	 */
+	fetch?: FetchFunction;
 	/**
 	 * Preferred transport for providers that support multiple transports.
 	 * Providers that do not support this option ignore it.
@@ -134,8 +157,9 @@ export interface StreamOptions {
 	 * On AWS Bedrock these are injected via a Smithy `build`-step middleware so
 	 * they are covered by SigV4 signing; reserved headers (`x-amz-*`,
 	 * `authorization`, `host`) are silently ignored to preserve SigV4 / bearer auth.
+	 * A null value suppresses a provider/API default header with the same name.
 	 */
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	/**
 	 * HTTP request timeout in milliseconds for providers/SDKs that support it.
 	 * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
@@ -176,9 +200,69 @@ export interface StreamOptions {
 
 export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;
 
+/**
+ * Maps known APIs to their full provider-specific stream option types.
+ * Type-only imports from API implementation modules are erased at emit, so
+ * this is tree-shake safe.
+ */
+export interface ApiOptionsMap {
+	"anthropic-messages": AnthropicOptions;
+	"openai-completions": OpenAICompletionsOptions;
+	"openai-responses": OpenAIResponsesOptions;
+	"openai-codex-responses": OpenAICodexResponsesOptions;
+	"azure-openai-responses": AzureOpenAIResponsesOptions;
+	"google-generative-ai": GoogleOptions;
+	"google-vertex": GoogleVertexOptions;
+	"mistral-conversations": MistralOptions;
+	"bedrock-converse-stream": BedrockOptions;
+	"pi-messages": PiMessagesOptions;
+}
+
+/**
+ * Full stream options for an API. Known APIs resolve to their concrete option
+ * type; custom API strings fall back to the generic shape.
+ */
+export type ApiStreamOptions<TApi extends Api> = TApi extends keyof ApiOptionsMap
+	? ApiOptionsMap[TApi]
+	: StreamOptions & Record<string, unknown>;
+
+/**
+ * The uniform stream contract of an API implementation module: every module
+ * under `src/api/` exports exactly `stream` and `streamSimple`, so the module
+ * itself satisfies this interface. Lazy wrappers (`lazyApi()`) and provider
+ * factories pass these around as values. This is the untyped dispatch shape;
+ * per-API option typing lives on the implementation modules themselves and on
+ * `Provider.stream()` via `ApiStreamOptions`.
+ */
+export interface ProviderStreams {
+	stream(model: Model<Api>, context: Context, options?: StreamOptions): AssistantMessageEventStream;
+	streamSimple(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream;
+}
+
+/**
+ * The uniform contract of an image-generation API implementation module:
+ * every image API module under `src/api/` exports exactly `generateImages`,
+ * so the module itself satisfies this interface. Lazy wrappers and image
+ * provider factories pass these around as values.
+ */
+export interface ProviderImages {
+	generateImages(
+		model: ImagesModel<ImagesApi>,
+		context: ImagesContext,
+		options?: ImagesOptions,
+	): Promise<AssistantImages>;
+}
+
 export interface ImagesOptions {
 	signal?: AbortSignal;
 	apiKey?: string;
+	/** Optional fetch implementation for provider HTTP requests. Defaults to `globalThis.fetch`. */
+	fetch?: FetchFunction;
+	/**
+	 * Provider-scoped environment values. These take precedence over process.env for
+	 * provider configuration such as endpoint placeholders and proxy variables.
+	 */
+	env?: ProviderEnv;
 	/**
 	 * Optional callback for inspecting or replacing provider payloads before sending.
 	 * Return undefined to keep the payload unchanged.
@@ -191,8 +275,9 @@ export interface ImagesOptions {
 	/**
 	 * Optional custom HTTP headers to include in API requests.
 	 * Merged with provider defaults; can override default headers.
+	 * A null value suppresses a provider/API default header with the same name.
 	 */
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	/**
 	 * HTTP request timeout in milliseconds for providers/SDKs that support it.
 	 */
@@ -288,6 +373,12 @@ export interface Usage {
 	cacheWrite: number;
 	/** Subset of `cacheWrite` written with 1h retention. Only Anthropic reports this split. */
 	cacheWrite1h?: number;
+	/**
+	 * Reasoning/thinking tokens, when the provider reports them. This is a subset of
+	 * `output`: `output` already includes these tokens. Set to a number (possibly 0) by
+	 * providers that expose a reasoning breakdown; left undefined by providers that don't.
+	 */
+	reasoning?: number;
 	totalTokens: number;
 	cost: {
 		input: number;
@@ -298,7 +389,7 @@ export interface Usage {
 	};
 }
 
-export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+export type StopReason = "pending" | "stop" | "length" | "toolUse" | "error" | "aborted";
 
 export interface UserMessage {
 	role: "user";
@@ -310,7 +401,7 @@ export interface AssistantMessage {
 	role: "assistant";
 	content: (TextContent | ThinkingContent | ToolCall)[];
 	api: Api;
-	provider: Provider;
+	provider: ProviderId;
 	model: string;
 	responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
@@ -318,6 +409,7 @@ export interface AssistantMessage {
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
+	rawStopReason?: string;
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
@@ -327,6 +419,14 @@ export interface ToolResultMessage<TDetails = any> {
 	toolName: string;
 	content: (TextContent | ImageContent)[]; // Supports text and images
 	details?: TDetails;
+	/** Usage from the tool execution itself, if available. Not part of main LLM context accounting. */
+	usage?: Usage;
+	/**
+	 * Names from `Context.tools` that became available after this result.
+	 * Providers with native deferred tool loading use this as the load point;
+	 * other providers ignore it and use `Context.tools` normally.
+	 */
+	addedToolNames?: string[];
 	isError: boolean;
 	timestamp: number; // Unix timestamp in milliseconds
 }
@@ -344,7 +444,7 @@ export type ImagesStopReason = "stop" | "error" | "aborted";
 
 export interface AssistantImages {
 	api: ImagesApi;
-	provider: ImagesProvider;
+	provider: ImagesProviderId;
 	model: string;
 	output: ImagesOutputContent[];
 	responseId?: string;
@@ -356,10 +456,33 @@ export interface AssistantImages {
 
 import type { TSchema } from "typebox";
 
+/** OpenAI grammar variants for constrained sampling. */
+export type GrammarFormat = "openai_lark" | "openai_regex";
+
+export type GrammarVariants = Partial<Record<GrammarFormat, string>>;
+
+/**
+ * Optional provider-side constrained sampling configs for a tool.
+ *
+ * The `json_schema` value roughly maps to the concept of `strict` in APIs which is
+ * implemented as json-schema constrained sampling by APIs. Grammar variants let
+ * callers provide provider-specific encodings of the same intended language.
+ */
+export type ConstrainedSamplingConfig =
+	| {
+			type: "json_schema";
+			strict: "prefer" | "require";
+	  }
+	| {
+			type: "grammar";
+			variants: GrammarVariants;
+	  };
+
 export interface Tool<TParameters extends TSchema = TSchema> {
 	name: string;
 	description: string;
 	parameters: TParameters;
+	constrainedSampling?: false | ConstrainedSamplingConfig;
 }
 
 export interface Context {
@@ -403,6 +526,8 @@ export interface OpenAICompletionsCompat {
 	supportsReasoningEffort?: boolean;
 	/** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
 	supportsUsageInStreaming?: boolean;
+	/** Whether streamed responses include `finish_reason`. When false, pi infers `stop` or `toolUse` when the stream ends. Default: true. */
+	supportsFinishReason?: boolean;
 	/** Which field to use for max tokens. Default: auto-detected from URL. */
 	maxTokensField?: "max_completion_tokens" | "max_tokens";
 	/** Whether tool results require the `name` field. Default: auto-detected from URL. */
@@ -433,12 +558,18 @@ export interface OpenAICompletionsCompat {
 	vercelGatewayRouting?: VercelGatewayRouting;
 	/** Whether z.ai supports top-level `tool_stream: true` for streaming tool call deltas. Default: false. */
 	zaiToolStream?: boolean;
+	/** Whether the provider supports OpenAI custom tools with Lark/regex grammar formats. When false, grammar-constrained tools fall back to normal function tools. Default: false; the generated model catalog enables it for capable models. */
+	supportsOpenAIGrammarTools?: boolean;
 	/** Whether the provider supports the `strict` field in tool definitions. Default: true. */
 	supportsStrictMode?: boolean;
-	/** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user/assistant text content. */
+	/** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user, assistant, or tool-result text content. */
 	cacheControlFormat?: "anthropic";
-	/** Whether to send known session-affinity headers (`session_id`, `x-client-request-id`, `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false. */
+	/** Whether to send session-affinity data from `options.sessionId`. Default: false. */
 	sendSessionAffinityHeaders?: boolean;
+	/** Provider-specific deferred tool serialization mode. */
+	deferredToolsMode?: "kimi";
+	/** Session-affinity header format: `openai` sends `session_id`, `x-client-request-id`, and `x-session-affinity`; `openai-nosession` sends `x-client-request-id` and `x-session-affinity`; `openrouter` sends `x-session-id`. Does not affect the `prompt_cache_key` body param, which is governed by cache retention. Default: auto-detected. */
+	sessionAffinityFormat?: SessionAffinityFormat;
 	/** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
 	supportsLongCacheRetention?: boolean;
 }
@@ -447,10 +578,18 @@ export interface OpenAICompletionsCompat {
 export interface OpenAIResponsesCompat {
 	/** Whether the provider supports the `developer` role (vs `system`). Default: true. */
 	supportsDeveloperRole?: boolean;
-	/** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
-	sendSessionIdHeader?: boolean;
+	/** Session-affinity header format: `openai` sends `session_id` and `x-client-request-id`; `openai-nosession` sends `x-client-request-id`; `openrouter` sends `x-session-id`. Does not affect the `prompt_cache_key` body param, which is governed by cache retention. Default: auto-detected. */
+	sessionAffinityFormat?: SessionAffinityFormat;
 	/** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
 	supportsLongCacheRetention?: boolean;
+	/** Whether the provider supports strict JSON-schema function tools. Defaults are API-specific; generated OpenAI models enable it explicitly. */
+	supportsStrictMode?: boolean;
+	/** Whether to emit OpenAI custom tools with Lark/regex grammar formats. When false, grammar-constrained tools fall back to normal function tools. Default: false; the generated model catalog enables it for capable models. */
+	supportsOpenAIGrammarTools?: boolean;
+	/** Whether the model supports client-executed tool search for deferred tools. Default: false. */
+	supportsToolSearch?: boolean;
+	/** Whether the model accepts `prompt_cache_options` (OpenAI GPT-5.6+ explicit prompt caching). Older OpenAI models reject the parameter. Default: false. */
+	supportsExplicitPromptCacheMode?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
@@ -499,6 +638,20 @@ export interface AnthropicMessagesCompat {
 	forceAdaptiveThinking?: boolean;
 	/** Whether to replay empty thinking signatures as `signature: ""` instead of converting thinking to text. Default: false. */
 	allowEmptySignature?: boolean;
+	/** Whether the provider supports Anthropic strict tool schemas. Default: false; generated Anthropic models enable it explicitly. */
+	supportsStrictTools?: boolean;
+	/**
+	 * Whether the provider supports deferred tools loaded by `tool_reference`
+	 * blocks in tool results. Default: true for first-party Anthropic models
+	 * except Haiku and models older than Claude 4.5; false for other providers.
+	 */
+	supportsToolReferences?: boolean;
+}
+
+/** Compatibility settings for Amazon Bedrock models. */
+export interface BedrockCompat {
+	/** Whether the model supports Bedrock strict tool schemas. Default: false. */
+	supportsStrictMode?: boolean;
 }
 
 /**
@@ -588,12 +741,29 @@ export interface VercelGatewayRouting {
 	order?: string[];
 }
 
+export interface ModelCostRates {
+	input: number; // $/million tokens
+	output: number; // $/million tokens
+	cacheRead: number; // $/million tokens
+	cacheWrite: number; // $/million tokens
+}
+
+export interface ModelCostTier extends ModelCostRates {
+	/** Use this tier for requests whose total input usage exceeds this token count. */
+	inputTokensAbove: number;
+}
+
+export interface ModelCost extends ModelCostRates {
+	/** Request-wide pricing tiers. The highest matching input threshold applies to the full request. */
+	tiers?: ModelCostTier[];
+}
+
 // Model interface for the unified model system
 export interface Model<TApi extends Api> {
 	id: string;
 	name: string;
 	api: TApi;
-	provider: Provider;
+	provider: ProviderId;
 	baseUrl: string;
 	reasoning: boolean;
 	/**
@@ -602,28 +772,25 @@ export interface Model<TApi extends Api> {
 	 */
 	thinkingLevelMap?: ThinkingLevelMap;
 	input: ("text" | "image")[];
-	cost: {
-		input: number; // $/million tokens
-		output: number; // $/million tokens
-		cacheRead: number; // $/million tokens
-		cacheWrite: number; // $/million tokens
-	};
+	cost: ModelCost;
 	contextWindow: number;
 	maxTokens: number;
 	headers?: Record<string, string>;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
 	compat?: TApi extends "openai-completions"
 		? OpenAICompletionsCompat
-		: TApi extends "openai-responses"
+		: TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
 			? OpenAIResponsesCompat
 			: TApi extends "anthropic-messages"
 				? AnthropicMessagesCompat
-				: never;
+				: TApi extends "bedrock-converse-stream"
+					? BedrockCompat
+					: never;
 }
 
 export interface ImagesModel<TApi extends ImagesApi>
 	extends Omit<Model<Api>, "api" | "provider" | "reasoning" | "contextWindow" | "maxTokens" | "compat"> {
 	api: TApi;
-	provider: ImagesProvider;
+	provider: ImagesProviderId;
 	output: ("text" | "image")[];
 }
