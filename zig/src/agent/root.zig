@@ -19,6 +19,8 @@ pub const harness = struct {
     pub const session_memory_repo = @import("harness/session/repo/memory.zig");
     pub const session_repo_shared = @import("harness/session/repo/shared.zig");
     pub const session = @import("harness/session/session.zig");
+    pub const session_array_session_index = @import("harness/session/array_session_index.zig");
+    pub const session_keyed_operation_queue = @import("harness/session/keyed_operation_queue.zig");
     pub const session_jsonl_storage = @import("harness/session/storage/jsonl.zig");
     pub const session_memory_storage = @import("harness/session/storage/memory.zig");
     pub const skills = @import("harness/skills.zig");
@@ -71,6 +73,8 @@ test {
     _ = @import("harness/session/repo/memory.zig");
     _ = @import("harness/session/repo/shared.zig");
     _ = @import("harness/session/session.zig");
+    _ = @import("harness/session/array_session_index.zig");
+    _ = @import("harness/session/keyed_operation_queue.zig");
     _ = @import("harness/session/storage/jsonl.zig");
     _ = @import("harness/session/storage/memory.zig");
     _ = @import("harness/skills.zig");
