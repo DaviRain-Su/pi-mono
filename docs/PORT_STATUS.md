@@ -18,7 +18,7 @@
 
 From `zig-pi-port-audit` (2026-08-02), refreshed:
 
-1. Agent: Wire `ArraySessionIndex` into memory/jsonl storage + `SessionRepository` compose beyond stubs
+1. Agent: Jsonl session backend/repo compose + thin `InMemorySessionRepository` facade
 2. Agent: Unsupported session search rejection + storage-owned readers
 3. Coding-agent: `ModelRuntime` facade (display name / auth offline)
 4. Coding-agent: `agent_settled` on extension bus (keep `sub_agent_readiness`)
@@ -27,6 +27,7 @@ From `zig-pi-port-audit` (2026-08-02), refreshed:
 
 ## Recent notes
 
+- 2026-08-02: Ported `InMemorySessionBackend` (`zig/src/agent/harness/session/repo/memory.zig`) composing `ArraySessionIndex` + `KeyedOperationQueue`, pure fork helpers in `repo/shared.zig`, SessionStorage projections, disposed rejection; offline tests mirroring TS InMemory cases via `appendEntry`.
 - 2026-08-02: Ported pure `ArraySessionIndex` (`zig/src/agent/harness/session/array_session_index.zig`) with bounded branch-query + projections + offline tests; marked keyed-operation-queue implemented (was already green).
 - 2026-08-02: Merged `earendil-works/pi` main into `zig-implementation`. Seeded goal + ledgers + workflows.
 - 2026-08-02: `zig-pi-port-audit` complete — no demote_candidates (seed had no `implemented` rows). Soft honesty: agent `session/repo/*` stubs are closer to **missing** than partial vs TS `SessionRepository`. Full inventory in workflow scratch report.
