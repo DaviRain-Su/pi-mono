@@ -48,6 +48,26 @@ describe("viewport layout", () => {
 		assert.strictEqual(renderCount, 1);
 	});
 
+	it("paints only clipped rows from very large scroll content", () => {
+		const lineCount = 1_000_000_000;
+		const lines: string[] = [];
+		lines.length = lineCount;
+		lines[lineCount - 4] = "before";
+		lines[lineCount - 3] = "visible 1";
+		lines[lineCount - 2] = "visible 2";
+		lines[lineCount - 1] = "visible 3";
+		const transcript = new ScrollView(
+			{
+				render: () => lines,
+				invalidate: () => {},
+			},
+			{ follow: "end" },
+		);
+
+		const frame = renderLayoutFrame(transcript, 10, 3, () => {});
+		assert.deepStrictEqual(visibleLines(frame.lines), ["visible 1", "visible 2", "visible 3"]);
+	});
+
 	it("shrinks entries to their minimum sizes", () => {
 		const frame = renderLayoutFrame(
 			new VStack([

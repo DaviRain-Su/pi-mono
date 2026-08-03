@@ -117,6 +117,22 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("invalidates overlays with an explicit layout root", () => {
+		const tui = new TuiAltScreen(new VirtualTerminal());
+		const overlay = new Text("overlay", 0, 0);
+		let invalidated = false;
+		overlay.invalidate = () => {
+			invalidated = true;
+		};
+		tui.setLayoutRoot(new Text("root", 0, 0));
+		tui.showOverlay(overlay);
+
+		tui.invalidate();
+
+		assert.strictEqual(invalidated, true);
+		tui.stop();
+	});
+
 	it("routes wheel input to the scroll view under the pointer", async () => {
 		const terminal = new VirtualTerminal(20, 4);
 		const tui = new TuiAltScreen(terminal);
@@ -455,6 +471,130 @@ describe("TuiAltScreen", () => {
 			assert.ok(!redrawWrites.includes("\x1b_Ga=T"));
 			assert.ok(redrawWrites.length < 2000, `expected placement-only redraw, got ${redrawWrites.length} bytes`);
 			assert.ok(terminal.getViewport().some((line) => line.trimEnd() === "changed"));
+			tui.stop();
+		} finally {
+			resetCapabilitiesCache();
+		}
+	});
+
+	it("retains recently offscreen Kitty images for placement-only reuse", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		try {
+			const terminal = new RecordingTerminal(20, 1);
+			const tui = new TuiAltScreen(terminal);
+			const imageId = 321;
+			const imageLine = encodeKitty("AAAA", { columns: 2, rows: 1, imageId, moveCursor: false });
+			registerKittyImageMetadata({ imageId, columns: 2, rows: 1, widthPx: 100, heightPx: 50 });
+			tui.setLayoutRoot(
+				new ScrollView(
+					{
+						render: () => [imageLine, "after"],
+						invalidate: () => {},
+					},
+					{ primary: true },
+				),
+			);
+			tui.start();
+			await terminal.waitForRender();
+			assert.ok(terminal.events.some((event) => event.type === "write" && event.data.includes("\x1b_Ga=T")));
+
+			const eventCount = terminal.events.length;
+			tui.scrollBy(1);
+			await terminal.waitForRender();
+			tui.scrollBy(-1);
+			await terminal.waitForRender();
+			const reentryWrites = terminal.events
+				.slice(eventCount)
+				.filter((event): event is { type: "write"; data: string } => event.type === "write")
+				.map((event) => event.data)
+				.join("");
+			assert.ok(reentryWrites.includes("\x1b_Ga=p,q=2"));
+			assert.ok(!reentryWrites.includes("\x1b_Ga=T"));
+			assert.ok(!reentryWrites.includes(`\x1b_Ga=d,d=I,i=${imageId},q=2\x1b\\`));
+			tui.stop();
+		} finally {
+			resetCapabilitiesCache();
+		}
+	});
+
+	it("evicts the least recently visible Kitty image when the cache is full", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		try {
+			const terminal = new RecordingTerminal(20, 1);
+			const tui = new TuiAltScreen(terminal);
+			const firstImageId = 500;
+			const imageLines = Array.from({ length: 18 }, (_, index) => {
+				const imageId = firstImageId + index;
+				registerKittyImageMetadata({ imageId, columns: 2, rows: 1, widthPx: 100, heightPx: 50 });
+				return encodeKitty("AAAA", { columns: 2, rows: 1, imageId, moveCursor: false });
+			});
+			tui.setLayoutRoot(
+				new ScrollView(
+					{
+						render: () => imageLines,
+						invalidate: () => {},
+					},
+					{ primary: true },
+				),
+			);
+			tui.start();
+			await terminal.waitForRender();
+			for (let index = 1; index < imageLines.length; index++) {
+				tui.scrollBy(1);
+				await terminal.waitForRender();
+			}
+			assert.ok(
+				terminal.events.some(
+					(event) => event.type === "write" && event.data.includes(`\x1b_Ga=d,d=I,i=${firstImageId},q=2\x1b\\`),
+				),
+			);
+
+			const eventCount = terminal.events.length;
+			tui.scrollToTop();
+			await terminal.waitForRender();
+			const reentryWrites = terminal.events
+				.slice(eventCount)
+				.filter((event): event is { type: "write"; data: string } => event.type === "write")
+				.map((event) => event.data)
+				.join("");
+			assert.ok(reentryWrites.includes("\x1b_Ga=T"));
+			tui.stop();
+		} finally {
+			resetCapabilitiesCache();
+		}
+	});
+
+	it("evicts offscreen Kitty images when decoded raster memory exceeds the cache quota", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		try {
+			const terminal = new RecordingTerminal(20, 1);
+			const tui = new TuiAltScreen(terminal);
+			const firstImageId = 600;
+			const imageLines = Array.from({ length: 4 }, (_, index) => {
+				const imageId = firstImageId + index;
+				registerKittyImageMetadata({ imageId, columns: 2, rows: 1, widthPx: 3840, heightPx: 2160 });
+				return encodeKitty("AAAA", { columns: 2, rows: 1, imageId, moveCursor: false });
+			});
+			tui.setLayoutRoot(
+				new ScrollView(
+					{
+						render: () => imageLines,
+						invalidate: () => {},
+					},
+					{ primary: true },
+				),
+			);
+			tui.start();
+			await terminal.waitForRender();
+			for (let index = 1; index < imageLines.length; index++) {
+				tui.scrollBy(1);
+				await terminal.waitForRender();
+			}
+			assert.ok(
+				terminal.events.some(
+					(event) => event.type === "write" && event.data.includes(`\x1b_Ga=d,d=I,i=${firstImageId},q=2\x1b\\`),
+				),
+			);
 			tui.stop();
 		} finally {
 			resetCapabilitiesCache();
