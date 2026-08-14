@@ -5,6 +5,8 @@ import type {
 	Context,
 	Model,
 	ModelsApiStreamOptions,
+	ModelsRefreshOptions,
+	ModelsRefreshResult,
 	Provider,
 	ProviderHeaders,
 } from "@earendil-works/pi-ai";
@@ -17,6 +19,7 @@ export type ResolvedRequestAuth =
 			ok: true;
 			apiKey?: string;
 			headers?: ProviderHeaders;
+			baseUrl?: string;
 			env?: Record<string, string>;
 	  }
 	| { ok: false; error: string };
@@ -34,8 +37,8 @@ export class ModelRegistry {
 	}
 
 	/** Reload models.json asynchronously. Await before making synchronous registry reads. */
-	async refresh(): Promise<void> {
-		await this.runtime.refresh();
+	refresh(options?: ModelsRefreshOptions): Promise<ModelsRefreshResult> {
+		return this.runtime.refresh(options);
 	}
 
 	getError(): string | undefined {
@@ -72,6 +75,7 @@ export class ModelRegistry {
 				ok: true,
 				apiKey: resolution.auth.apiKey,
 				headers: resolution.auth.headers,
+				...(resolution.auth.baseUrl ? { baseUrl: resolution.auth.baseUrl } : {}),
 				env: resolution.env,
 			};
 		} catch (error) {

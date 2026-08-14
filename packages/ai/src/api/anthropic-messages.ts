@@ -33,11 +33,12 @@ import { splitDeferredTools } from "../utils/deferred-tools.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
+import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 
-import { resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
+import { getJsonSchemaToolParameters, resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampMaxTokensToContext } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
@@ -267,6 +268,20 @@ function mergeHeaders(...headerSources: (ProviderHeaders | undefined)[]): Provid
 		if (headers) {
 			Object.assign(merged, headers);
 		}
+	}
+	return merged;
+}
+
+function mergeClientHeaders(
+	model: Model<"anthropic-messages">,
+	...headerSources: (ProviderHeaders | undefined)[]
+): ProviderHeaders {
+	const merged = mergeHeaders(...headerSources);
+	if (model.provider === "kimi-coding") {
+		for (const name of Object.keys(merged)) {
+			if (name.toLowerCase() === "user-agent") delete merged[name];
+		}
+		merged["User-Agent"] = getPiUserAgent();
 	}
 	return merged;
 }
@@ -872,7 +887,8 @@ function createClient(
 			baseURL: model.baseUrl,
 			dangerouslyAllowBrowser: true,
 			fetch,
-			defaultHeaders: mergeHeaders(
+			defaultHeaders: mergeClientHeaders(
+				model,
 				{
 					accept: "application/json",
 					"anthropic-dangerous-direct-browser-access": "true",
@@ -895,7 +911,8 @@ function createClient(
 			baseURL: model.baseUrl,
 			dangerouslyAllowBrowser: true,
 			fetch,
-			defaultHeaders: mergeHeaders(
+			defaultHeaders: mergeClientHeaders(
+				model,
 				{
 					accept: "application/json",
 					"anthropic-dangerous-direct-browser-access": "true",
@@ -914,7 +931,8 @@ function createClient(
 	// API key or header-owned auth.
 	const sessionAffinityHeaders: ProviderHeaders =
 		sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders ? { "x-session-affinity": sessionId } : {};
-	const defaultHeaders = mergeHeaders(
+	const defaultHeaders = mergeClientHeaders(
+		model,
 		{
 			accept: "application/json",
 			"anthropic-dangerous-direct-browser-access": "true",
@@ -1296,7 +1314,8 @@ function convertTools(
 
 	return tools.map((tool, index) => {
 		const strict = resolveJsonSchemaStrictSampling(tool, supportsStrictTools);
-		const schema = tool.parameters as { properties?: unknown; required?: string[] };
+		const parameters = getJsonSchemaToolParameters(tool, strict);
+		const schema = parameters as { properties?: unknown; required?: string[] };
 		const legacyInputSchema = {
 			type: "object" as const,
 			properties: schema.properties ?? {},
@@ -1305,7 +1324,7 @@ function convertTools(
 		const inputSchema =
 			strict === true
 				? {
-						...(tool.parameters as Record<string, unknown>),
+						...(parameters as Record<string, unknown>),
 						...legacyInputSchema,
 					}
 				: legacyInputSchema;

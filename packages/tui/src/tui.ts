@@ -337,6 +337,7 @@ export abstract class TuiBase extends Container implements TUI {
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
 	private renderRequested = false;
+	private immediateRenderScheduled = false;
 	private renderTimer: NodeJS.Timeout | undefined;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
@@ -661,6 +662,13 @@ export abstract class TuiBase extends Container implements TUI {
 		return this.overlayStack.some((o) => this.isOverlayVisible(o));
 	}
 
+	/** Check if the focused component is a visible overlay */
+	protected isOverlayFocused(): boolean {
+		return this.overlayStack.some(
+			(entry) => entry.component === this.focusedComponent && this.isOverlayVisible(entry),
+		);
+	}
+
 	/** Check if an overlay entry is currently visible */
 	private isOverlayVisible(entry: OverlayStackEntry): boolean {
 		if (entry.hidden) return false;
@@ -743,10 +751,7 @@ export abstract class TuiBase extends Container implements TUI {
 
 	stop(options: TuiStopOptions = {}): void {
 		this.stopped = true;
-		if (this.renderTimer) {
-			clearTimeout(this.renderTimer);
-			this.renderTimer = undefined;
-		}
+		this.cancelRenderTimer();
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
 		}
@@ -759,10 +764,7 @@ export abstract class TuiBase extends Container implements TUI {
 	renderNow(force = false): void {
 		if (force) this.resetRenderState();
 		this.renderRequested = false;
-		if (this.renderTimer) {
-			clearTimeout(this.renderTimer);
-			this.renderTimer = undefined;
-		}
+		this.cancelRenderTimer();
 		this.lastRenderAt = performance.now();
 		this.doRender();
 	}
@@ -770,24 +772,35 @@ export abstract class TuiBase extends Container implements TUI {
 	requestRender(force = false): void {
 		if (force) {
 			this.resetRenderState();
-			if (this.renderTimer) {
-				clearTimeout(this.renderTimer);
-				this.renderTimer = undefined;
-			}
-			this.renderRequested = true;
-			process.nextTick(() => {
-				if (this.stopped || !this.renderRequested) {
-					return;
-				}
-				this.renderRequested = false;
-				this.lastRenderAt = performance.now();
-				this.doRender();
-			});
+			this.requestImmediateRender();
 			return;
 		}
 		if (this.renderRequested) return;
 		this.renderRequested = true;
 		process.nextTick(() => this.scheduleRender());
+	}
+
+	private requestImmediateRender(): void {
+		this.cancelRenderTimer();
+		this.renderRequested = true;
+		if (this.immediateRenderScheduled) return;
+		this.immediateRenderScheduled = true;
+		process.nextTick(() => {
+			this.immediateRenderScheduled = false;
+			if (this.stopped || !this.renderRequested) return;
+			// A previously queued scheduleRender() can create a timer before this
+			// callback runs. User input must preempt that throttled frame.
+			this.cancelRenderTimer();
+			this.renderRequested = false;
+			this.lastRenderAt = performance.now();
+			this.doRender();
+		});
+	}
+
+	private cancelRenderTimer(): void {
+		if (!this.renderTimer) return;
+		clearTimeout(this.renderTimer);
+		this.renderTimer = undefined;
 	}
 
 	private scheduleRender(): void {
@@ -882,7 +895,9 @@ export abstract class TuiBase extends Container implements TUI {
 				return;
 			}
 			this.focusedComponent.handleInput(data);
-			this.requestRender();
+			// Keyboard input is latency-sensitive. Avoid the throttled timer path,
+			// where even setTimeout(0) can take a full 16 ms tick on Windows.
+			this.requestImmediateRender();
 		}
 	}
 

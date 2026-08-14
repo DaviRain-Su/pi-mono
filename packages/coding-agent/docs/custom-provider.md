@@ -227,7 +227,7 @@ The `api` field determines which streaming implementation is used:
 | `openai-responses` | OpenAI Responses API |
 | `azure-openai-responses` | Azure OpenAI Responses API |
 | `openai-codex-responses` | OpenAI Codex Responses API |
-| `mistral-conversations` | Mistral SDK Conversations/Chat streaming |
+| `mistral-conversations` | Native Mistral Chat Completions streaming |
 | `google-generative-ai` | Google Generative AI API |
 | `google-vertex` | Google Vertex AI API |
 | `bedrock-converse-stream` | Amazon Bedrock Converse API |
@@ -331,8 +331,8 @@ pi.registerProvider("corporate-ai", {
       };
     },
 
-    async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-      const tokens = await refreshAccessToken(credentials.refresh);
+    async refreshToken(credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials> {
+      const tokens = await refreshAccessToken(credentials.refresh, signal);
       return {
         refresh: tokens.refreshToken ?? credentials.refresh,
         access: tokens.accessToken,
@@ -688,7 +688,7 @@ interface ProviderConfig {
   oauth?: {
     name: string;
     login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
-    refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
+    refreshToken(credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials>;
     getApiKey(credentials: OAuthCredentials): string;
   };
 }

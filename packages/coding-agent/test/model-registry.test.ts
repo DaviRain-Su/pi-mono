@@ -24,7 +24,7 @@ describe("ModelRegistry", () => {
 		tempDir = join(tmpdir(), `pi-test-model-registry-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 		modelsJsonPath = join(tempDir, "models.json");
-		authStorage = AuthStorage.create(join(tempDir, "auth.json"));
+		authStorage = AuthStorage.inMemory();
 	});
 
 	afterEach(() => {
@@ -713,6 +713,39 @@ describe("ModelRegistry", () => {
 			expect(opus?.name).not.toBe("Custom Sonnet Name");
 		});
 
+		test("custom model and model override carry sampling params", async () => {
+			writeRawModelsJson({
+				openrouter: {
+					baseUrl: "https://my-proxy.example.com/v1",
+					api: "openai-completions",
+					models: [
+						{
+							id: "custom/sampling-model",
+							samplingParams: { temperature: 1, top_p: 0.95, top_k: 0 },
+						},
+					],
+					modelOverrides: {
+						"anthropic/claude-sonnet-4": {
+							samplingParams: { top_p: 0.9 },
+						},
+					},
+				},
+			});
+
+			const registry = await createModelRegistry(authStorage, modelsJsonPath);
+			const models = getModelsForProvider(registry, "openrouter");
+
+			const custom = models.find((m) => m.id === "custom/sampling-model");
+			expect(custom?.samplingParams).toEqual({ temperature: 1, top_p: 0.95, top_k: 0 });
+
+			const sonnet = models.find((m) => m.id === "anthropic/claude-sonnet-4");
+			expect(sonnet?.samplingParams).toEqual({ top_p: 0.9 });
+
+			// Models without sampling config keep it unset.
+			const opus = models.find((m) => m.id === "anthropic/claude-opus-4");
+			expect(opus?.samplingParams).toBeUndefined();
+		});
+
 		test("model override with compat.openRouterRouting", async () => {
 			writeRawModelsJson({
 				openrouter: {
@@ -1144,7 +1177,7 @@ describe("ModelRegistry", () => {
 				}),
 			).toThrow('Provider broken-provider: "api" is required when registering streamSimple.');
 
-			await expect(registry.refresh()).resolves.toBeUndefined();
+			await expect(registry.refresh()).resolves.toMatchObject({ aborted: false });
 		});
 
 		test("failed registerProvider does not remove existing provider models", async () => {
@@ -1188,7 +1221,7 @@ describe("ModelRegistry", () => {
 			).toThrow('Provider demo-provider, model broken-model: no "api" specified.');
 
 			expect(registry.find("demo-provider", "demo-model")).toBeDefined();
-			await expect(registry.refresh()).resolves.toBeUndefined();
+			await expect(registry.refresh()).resolves.toMatchObject({ aborted: false });
 			expect(registry.find("demo-provider", "demo-model")).toBeDefined();
 		});
 

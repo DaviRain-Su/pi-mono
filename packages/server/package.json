@@ -1,6 +1,6 @@
 {
 	"name": "@earendil-works/pi-server",
-	"version": "0.83.0",
+	"version": "0.84.2",
 	"description": "experimental server package for pi",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -17,14 +17,7 @@
 		"./unix": {
 			"types": "./dist/transports/unix/index.d.ts",
 			"import": "./dist/transports/unix/index.js"
-		},
-		"./legacy": {
-			"types": "./dist/legacy/index.d.ts",
-			"import": "./dist/legacy/index.js"
 		}
-	},
-	"bin": {
-		"server": "./dist/legacy/cli.js"
 	},
 	"files": [
 		"dist",
@@ -34,7 +27,7 @@
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
-		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/legacy/cli.js",
+		"build": "tsgo -p tsconfig.build.json",
 		"test": "vitest --run",
 		"typecheck": "tsgo -p tsconfig.test.json",
 		"prepublishOnly": "npm run clean && npm run build"
@@ -54,9 +47,8 @@
 		"node": ">=22.19.0"
 	},
 	"dependencies": {
-		"@earendil-works/pi-ai": "^0.83.0",
-		"@earendil-works/pi-coding-agent": "^0.83.0",
-		"@earendil-works/pi-protocol": "^0.83.0"
+		"@earendil-works/pi-ai": "^0.84.2",
+		"@earendil-works/pi-protocol": "^0.84.2"
 	},
 	"devDependencies": {
 		"shx": "0.4.0",

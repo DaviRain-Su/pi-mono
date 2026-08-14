@@ -1,4 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
+import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, test, vi } from "vitest";
 import {
 	defaultModelPerProvider,
@@ -700,15 +701,30 @@ describe("default model selection", () => {
 	});
 
 	test("zai, minimax, cerebras, and ant-ling defaults track current models", () => {
-		expect(defaultModelPerProvider.zai).toBe("glm-5.1");
+		expect(defaultModelPerProvider.zai).toBe("glm-5.3");
+		expect(defaultModelPerProvider["zai-coding-cn"]).toBe("glm-5.3");
 		expect(defaultModelPerProvider.minimax).toBe("MiniMax-M2.7");
 		expect(defaultModelPerProvider["minimax-cn"]).toBe("MiniMax-M2.7");
 		expect(defaultModelPerProvider.cerebras).toBe("zai-glm-4.7");
 		expect(defaultModelPerProvider["ant-ling"]).toBe("Ring-2.6-1T");
 	});
 
+	test("built-in defaults exist in generated provider catalogs", () => {
+		for (const provider of getBuiltinProviders()) {
+			const defaultId = defaultModelPerProvider[provider];
+			expect(
+				getBuiltinModels(provider).some((model) => model.id === defaultId),
+				`${provider} default ${defaultId} should exist in its generated catalog`,
+			).toBe(true);
+		}
+	});
+
 	test("ai-gateway default tracks current model", () => {
 		expect(defaultModelPerProvider["vercel-ai-gateway"]).toBe("zai/glm-5.1");
+	});
+
+	test("qwen token plan individual default tracks current model", () => {
+		expect(defaultModelPerProvider["qwen-token-plan-individual"]).toBe("qwen3.8-max");
 	});
 
 	test("findInitialModel accepts explicit provider custom model ids", async () => {
@@ -743,7 +759,7 @@ describe("default model selection", () => {
 		};
 
 		const registry = {
-			getAvailable: async () => [aiGatewayModel],
+			getAvailableSnapshot: () => [aiGatewayModel],
 		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
 
 		const result = await findInitialModel({
@@ -780,7 +796,7 @@ describe("default model selection", () => {
 					? savedDeepSeekModel
 					: undefined,
 			hasConfiguredAuth: (provider: string) => provider === "spark-two",
-			getAvailable: async () => [localDeepSeekModel],
+			getAvailableSnapshot: () => [localDeepSeekModel],
 		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
 
 		const result = await findInitialModel({

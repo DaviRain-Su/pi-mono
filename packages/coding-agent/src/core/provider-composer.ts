@@ -32,10 +32,12 @@ import {
 
 export interface ExtensionOAuthConfig {
 	name: string;
+	/** Whether access through this auth method is backed by a provider subscription. */
+	isSubscription?: boolean;
 	/** @deprecated Retained for extension source compatibility; ignored by canonical auth flows. */
 	usesCallbackServer?: boolean;
 	login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
-	refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
+	refreshToken(credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials>;
 	getApiKey(credentials: OAuthCredentials): string;
 	modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
 }
@@ -61,6 +63,7 @@ export interface ProviderConfigInput {
 		cost: Model<Api>["cost"];
 		contextWindow: number;
 		maxTokens: number;
+		samplingParams?: Record<string, unknown>;
 		headers?: Record<string, string>;
 		compat?: Model<Api>["compat"];
 	}>;
@@ -117,6 +120,9 @@ function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride
 			: model.cost,
 		contextWindow: override.contextWindow ?? model.contextWindow,
 		maxTokens: override.maxTokens ?? model.maxTokens,
+		samplingParams: override.samplingParams
+			? { ...model.samplingParams, ...override.samplingParams }
+			: model.samplingParams,
 		compat: mergeCompat(model.compat, override.compat),
 	};
 }
@@ -153,6 +159,7 @@ function modelFromJson(
 		cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: definition.contextWindow ?? 128000,
 		maxTokens: definition.maxTokens ?? 16384,
+		samplingParams: definition.samplingParams,
 		headers: undefined,
 		compat: mergeCompat(providerConfig.compat, definition.compat),
 	};
@@ -230,6 +237,7 @@ function applyExtension(
 function adaptOAuth(config: ExtensionOAuthConfig): OAuthAuth {
 	return {
 		name: config.name,
+		isSubscription: config.isSubscription,
 		login: async (callbacks) => {
 			const credential = await config.login({
 				onAuth: (info) => callbacks.notify({ type: "auth_url", ...info }),
@@ -242,7 +250,7 @@ function adaptOAuth(config: ExtensionOAuthConfig): OAuthAuth {
 			});
 			return { ...credential, type: "oauth" };
 		},
-		refresh: async (credential) => ({ ...(await config.refreshToken(credential)), type: "oauth" }),
+		refresh: async (credential, signal) => ({ ...(await config.refreshToken(credential, signal)), type: "oauth" }),
 		toAuth: async (credential) => ({ apiKey: config.getApiKey(credential) }),
 	};
 }
@@ -465,7 +473,7 @@ export function composeModelProvider(
 				: api.stream(model, context, options);
 		});
 
-	return {
+	const provider: Provider = {
 		id: providerId,
 		name: extension?.name ?? config?.name ?? base?.name ?? extension?.oauth?.name ?? providerId,
 		baseUrl: extension?.baseUrl ?? config?.baseUrl ?? base?.baseUrl,
@@ -476,18 +484,23 @@ export function composeModelProvider(
 			base?.refreshModels || extension?.refreshModels || extension?.oauth?.modifyModels
 				? async (context) => {
 						await base?.refreshModels?.(context);
-						if (extension?.refreshModels) {
-							const refreshed = await extension.refreshModels(context);
-							if (!context.signal?.aborted) {
-								// Validate before publishing the new synchronous list.
-								applyExtension(providerId, applyModelsJson(providerId, base?.getModels() ?? [], config), {
-									...extension,
-									models: refreshed,
-								});
-								refreshedExtensionModels = refreshed;
-							}
-						}
-						extensionOAuthCredential = context.credential?.type === "oauth" ? context.credential : undefined;
+						let refreshed: NonNullable<ProviderConfigInput["models"]> | undefined;
+						if (extension?.refreshModels) refreshed = await extension.refreshModels(context);
+						if (context.signal.aborted) return;
+						const oauthCredential = context.credential?.type === "oauth" ? context.credential : undefined;
+						await context.publish({
+							update: () => {
+								if (refreshed) {
+									// Validate before publishing the new synchronous list.
+									applyExtension(providerId, applyModelsJson(providerId, base?.getModels() ?? [], config), {
+										...extension,
+										models: refreshed,
+									});
+									refreshedExtensionModels = refreshed;
+								}
+								extensionOAuthCredential = oauthCredential;
+							},
+						});
 					}
 				: undefined,
 		filterModels: base?.filterModels
@@ -496,6 +509,17 @@ export function composeModelProvider(
 		stream: (model, context, options) => streamWith(model, context, options, false),
 		streamSimple: (model, context, options) => streamWith(model, context, options, true),
 	};
+
+	const fetchDeferred = base?.fetchDeferred;
+	if (fetchDeferred) {
+		provider.fetchDeferred = (model, handle, options) => fetchDeferred(model, handle, options);
+	}
+	const cancelDeferred = base?.cancelDeferred;
+	if (cancelDeferred) {
+		provider.cancelDeferred = (model, handle, options) => cancelDeferred(model, handle, options);
+	}
+
+	return provider;
 }
 
 export function resolveConfiguredModelHeaders(

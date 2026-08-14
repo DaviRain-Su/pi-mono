@@ -2,14 +2,46 @@
 
 ## [Unreleased]
 
-### Breaking Changes
+## [0.84.2] - 2026-08-14
 
-- Changed `Session` into the sole opened-session aggregate and replaced `SessionStorage`, `SessionRepo`, and concrete per-session persistence classes with a non-owning `SessionRepository` and caller-owned, async-disposable `SessionStore` instances. Create stores with `createInMemorySessionStore()` or `createJsonlSessionStore()`, compose them with `createSessionRepository({ store, search: createScanningSessionSearch(store) })`, and dispose the store after draining harness and session work.
-- `Session` instances are now created by `SessionRepository`; direct construction from an independently supplied store and snapshot was removed.
+### Fixed
+
+- Fixed `streamProxy()` dropping finalized tool-call metadata such as OpenAI Responses namespaces ([#7709](https://github.com/earendil-works/pi/issues/7709)).
+
+## [0.84.1] - 2026-08-07
 
 ### Added
 
+- Added `BeforeToolCallResult.terminate` so blocked tool calls can participate in the existing batch early-termination rule ([#7715](https://github.com/earendil-works/pi/pull/7715) by [@muyiyr](https://github.com/muyiyr)).
+
+### Fixed
+
+- Fixed `Agent.reset()` clearing transcript and runtime state during active runs; it now rejects until the agent is idle ([#7717](https://github.com/earendil-works/pi/pull/7717) by [@wesleyzhangwq](https://github.com/wesleyzhangwq)).
+
+## [0.84.0] - 2026-08-06
+
+### Breaking Changes
+
+- Replaced the legacy harness session model with the v4 lane-based `Session`, `SessionStorage`, and `SessionRepo` APIs, including durable operation records, global facts, shared sequence numbers, and tree-scoped lane views.
+- Promoted the v2 session and `AgentHarness` API from the experimental entrypoint to the default package export and removed the experimental subpaths.
+- Removed the legacy JSONL and in-memory repository APIs. Use the v4 `JsonlSessionRepo` or `InMemorySessionRepo`, both implementing the new `SessionRepo` contract.
+- Added the required `FileSystem.renameFile()` operation to harness execution environments for atomic JSONL publication; custom file-system implementations must provide same-filesystem replacement semantics ([#7707](https://github.com/earendil-works/pi/pull/7707) by [@davidbrai](https://github.com/davidbrai)).
+
+### Added
+
+- Added typed AI-request and harness telemetry schemas, their combined schema tuple, callback helpers, and a generated schema reference.
 - Added bounded `Session.findEntriesOnBranch()` and `findEntryOnBranch()` queries with explicit traversal, filtering, ordering, and limit options.
+- Added a compile-complete `AgentHarness` v2 scaffold; unfinished operation paths reject with `HarnessNotImplemented` while durable execution is implemented.
+- Added `JsonlSessionRepo`, a v4 append-only JSONL session repository with metadata validation and shared storage semantics ([#7611](https://github.com/earendil-works/pi/pull/7611) by [@davidbrai](https://github.com/davidbrai)).
+- Added indexed `Session.findOpenOperations()` recovery queries and `RecordQuery.operationKind` filtering ([#7646](https://github.com/earendil-works/pi/pull/7646)).
+- Added `AgentOptions.shouldStopAfterTurn` for gracefully stopping after a completed turn before queued messages or another model call are processed. See [Agent Options](README.md#agent-options) ([#7367](https://github.com/earendil-works/pi/pull/7367) by [@acmerfight](https://github.com/acmerfight)).
+- Added proxy forwarding for arbitrary OpenAI-compatible `samplingParams` ([#7568](https://github.com/earendil-works/pi/pull/7568) by [@mrexodia](https://github.com/mrexodia)).
+
+### Fixed
+
+- Fixed Windows path handling for `NodeExecutionEnv` file basenames, recursive skill loading, and prompt template names.
+- Fixed `JsonlSessionRepo` enforcing session IDs globally across working directories; IDs are now unique within each working directory.
+- Fixed JSONL session forks and torn-tail repairs to publish atomically, avoiding partially written or corrupted sessions after interrupted writes ([#7707](https://github.com/earendil-works/pi/pull/7707) by [@davidbrai](https://github.com/davidbrai)).
 
 ## [0.83.0] - 2026-07-29
 

@@ -71,6 +71,7 @@ function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCo
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
 		supportsStrictMode: model.compat?.supportsStrictMode ?? false,
 		supportsOpenAIGrammarTools: model.compat?.supportsOpenAIGrammarTools ?? false,
+		supportsAdditionalTools: model.compat?.supportsAdditionalTools ?? false,
 		supportsToolSearch: model.compat?.supportsToolSearch ?? false,
 		supportsExplicitPromptCacheMode: model.compat?.supportsExplicitPromptCacheMode ?? false,
 	};
@@ -264,10 +265,16 @@ function buildParams(
 		compat.supportsOpenAIGrammarTools,
 	),
 ) {
-	const toolPlacement = splitDeferredTools(context, compat.supportsToolSearch);
+	const deferredToolsMode = compat.supportsAdditionalTools
+		? "additional-tools"
+		: compat.supportsToolSearch
+			? "tool-search"
+			: undefined;
+	const toolPlacement = splitDeferredTools(context, deferredToolsMode !== undefined);
 	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
 		grammarToolInputProperties,
 		deferredTools: toolPlacement.deferred,
+		deferredToolsMode,
 		toolOptions: {
 			supportsStrictMode: compat.supportsStrictMode,
 			supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
@@ -325,6 +332,11 @@ function buildParams(
 			};
 		}
 		if (model.provider === "xai") params.include = ["reasoning.encrypted_content"];
+	}
+
+	// Last so custom keys override the named request fields.
+	if (options?.samplingParams) {
+		Object.assign(params, options.samplingParams);
 	}
 
 	return params;

@@ -1,4 +1,3 @@
-import type * as NodeOs from "node:os";
 import type * as NodeZlib from "node:zlib";
 import type {
 	Tool as OpenAITool,
@@ -6,20 +5,6 @@ import type {
 	ResponseInput,
 	ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-
-type ProcessWithOsBuiltinModule = typeof process & {
-	getBuiltinModule?: (id: "node:os") => typeof NodeOs;
-};
-
-function loadNodeOs(): typeof NodeOs | null {
-	if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
-		return null;
-	}
-	return (process as ProcessWithOsBuiltinModule).getBuiltinModule?.("node:os") ?? null;
-}
-
-// NEVER convert to top-level runtime imports - breaks browser/Vite builds
-const _os: typeof NodeOs | null = loadNodeOs();
 
 import { clampThinkingLevel } from "../models.ts";
 import { registerSessionResourceCleanup } from "../session-resources.ts";
@@ -46,6 +31,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
+import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 import { uuidv7 } from "../utils/uuid.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
@@ -539,11 +525,17 @@ function buildRequestBody(
 ): RequestBody {
 	const supportsStrictMode = model.compat?.supportsStrictMode ?? true;
 	const supportsOpenAIGrammarTools = model.compat?.supportsOpenAIGrammarTools ?? false;
-	const toolPlacement = splitDeferredTools(context, model.compat?.supportsToolSearch ?? false);
+	const deferredToolsMode = model.compat?.supportsAdditionalTools
+		? "additional-tools"
+		: model.compat?.supportsToolSearch
+			? "tool-search"
+			: undefined;
+	const toolPlacement = splitDeferredTools(context, deferredToolsMode !== undefined);
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
 		grammarToolInputProperties,
 		deferredTools: toolPlacement.deferred,
+		deferredToolsMode,
 		toolOptions: {
 			strict: null,
 			supportsStrictMode,
@@ -662,7 +654,7 @@ async function processStream(
 	grammarToolInputProperties: ReadonlyMap<string, string>,
 	options?: OpenAICodexResponsesOptions,
 ): Promise<void> {
-	await processResponsesStream(mapCodexEvents(parseSSE(response, options?.signal)), output, stream, model, {
+	await processResponsesStream(mapCodexEvents(parseSSE(response, options?.signal), output), output, stream, model, {
 		serviceTier: options?.serviceTier,
 		grammarToolInputProperties,
 		resolveServiceTier: resolveCodexServiceTier,
@@ -719,7 +711,10 @@ function extractCodexEventError(event: Record<string, unknown>): { code?: string
 	};
 }
 
-async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): AsyncGenerator<ResponseStreamEvent> {
+async function* mapCodexEvents(
+	events: AsyncIterable<Record<string, unknown>>,
+	output: AssistantMessage,
+): AsyncGenerator<ResponseStreamEvent> {
 	for await (const event of events) {
 		const type = typeof event.type === "string" ? event.type : undefined;
 		if (!type) continue;
@@ -740,7 +735,10 @@ async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): 
 		}
 
 		if (type === "response.done" || type === "response.completed" || type === "response.incomplete") {
-			const response = (event as { response?: { status?: unknown } }).response;
+			const response = (event as { response?: { status?: unknown; end_turn?: unknown } }).response;
+			if (typeof response?.end_turn === "boolean") {
+				output.endTurn = response.end_turn;
+			}
 			const normalizedResponse = response
 				? { ...response, status: normalizeCodexStatus(response.status) }
 				: response;
@@ -1504,7 +1502,7 @@ async function processWebSocketStream(
 		socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
 		await processResponsesStream(
 			startWebSocketOutputOnFirstEvent(
-				mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs)),
+				mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs), output),
 				onStart,
 			),
 			output,
@@ -1606,8 +1604,7 @@ function buildBaseCodexHeaders(
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
 	headers.set("originator", "pi");
-	const userAgent = _os ? `pi (${_os.platform()} ${_os.release()}; ${_os.arch()})` : "pi (browser)";
-	headers.set("User-Agent", userAgent);
+	headers.set("User-Agent", getPiUserAgent());
 	return headers;
 }
 

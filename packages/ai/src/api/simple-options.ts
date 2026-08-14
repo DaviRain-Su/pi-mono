@@ -24,10 +24,16 @@ export function buildBaseOptions(
 	options?: SimpleStreamOptions,
 	apiKey?: string,
 ): StreamOptions {
+	const samplingParams =
+		model.samplingParams || options?.samplingParams
+			? { ...model.samplingParams, ...options?.samplingParams }
+			: undefined;
 	return {
 		temperature: options?.temperature,
+		samplingParams,
 		maxTokens: clampMaxTokensToContext(model, context, options?.maxTokens ?? model.maxTokens),
 		signal: options?.signal,
+		telemetryContext: options?.telemetryContext,
 		apiKey: apiKey || options?.apiKey,
 		fetch: options?.fetch,
 		transport: options?.transport,
@@ -44,6 +50,9 @@ export function buildBaseOptions(
 		env: options?.env,
 	};
 }
+
+/** Tokens always left for the answer when a thinking budget shares the response ceiling. */
+export const MIN_ANSWER_TOKENS = 1024;
 
 export function clampReasoning(effort: ThinkingLevel | undefined): Exclude<ThinkingLevel, "xhigh" | "max"> | undefined {
 	return effort === "xhigh" || effort === "max" ? "high" : effort;
@@ -64,14 +73,13 @@ export function adjustMaxTokensForThinking(
 	};
 	const budgets = { ...defaultBudgets, ...customBudgets };
 
-	const minOutputTokens = 1024;
 	const level = clampReasoning(reasoningLevel)!;
 	let thinkingBudget = budgets[level]!;
 	const maxTokens =
 		baseMaxTokens === undefined ? modelMaxTokens : Math.min(baseMaxTokens + thinkingBudget, modelMaxTokens);
 
 	if (maxTokens <= thinkingBudget) {
-		thinkingBudget = Math.max(0, maxTokens - minOutputTokens);
+		thinkingBudget = Math.max(0, maxTokens - MIN_ANSWER_TOKENS);
 	}
 
 	return { maxTokens, thinkingBudget };

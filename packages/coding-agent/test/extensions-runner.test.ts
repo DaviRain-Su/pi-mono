@@ -1,4 +1,4 @@
-import { createModelRegistry } from "./model-runtime-test-utils.ts";
+import { createInMemoryModelRegistry } from "./model-runtime-test-utils.ts";
 /**
  * Tests for ExtensionRunner - conflict detection, error handling, tool wrapping.
  */
@@ -33,8 +33,7 @@ describe("ExtensionRunner", () => {
 		extensionsDir = path.join(tempDir, "extensions");
 		fs.mkdirSync(extensionsDir);
 		sessionManager = SessionManager.inMemory();
-		const authStorage = AuthStorage.create(path.join(tempDir, "auth.json"));
-		modelRegistry = await createModelRegistry(authStorage);
+		modelRegistry = await createInMemoryModelRegistry(AuthStorage.inMemory());
 	});
 
 	afterEach(() => {
@@ -871,7 +870,7 @@ describe("ExtensionRunner", () => {
 			expect(errors).toEqual([
 				'/tmp/broken-extension.ts: Provider broken-provider: "api" is required when registering streamSimple.',
 			]);
-			await expect(modelRegistry.refresh()).resolves.toBeUndefined();
+			await expect(modelRegistry.refresh()).resolves.toMatchObject({ aborted: false });
 		});
 
 		it("pre-bind unregister removes all queued registrations for a provider", () => {

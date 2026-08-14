@@ -43,7 +43,7 @@ export type ProxyAssistantMessageEvent =
 	| { type: "thinking_end"; contentIndex: number; contentSignature?: string }
 	| { type: "toolcall_start"; contentIndex: number; id: string; toolName: string }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string }
-	| { type: "toolcall_end"; contentIndex: number }
+	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall }
 	| {
 			type: "done";
 			reason: Extract<StopReason, "stop" | "length" | "toolUse">;
@@ -59,6 +59,7 @@ export type ProxyAssistantMessageEvent =
 type ProxySerializableStreamOptions = Pick<
 	SimpleStreamOptions,
 	| "temperature"
+	| "samplingParams"
 	| "maxTokens"
 	| "reasoning"
 	| "cacheRetention"
@@ -101,6 +102,7 @@ export interface ProxyStreamOptions extends ProxySerializableStreamOptions {
 function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializableStreamOptions {
 	return {
 		temperature: options.temperature,
+		samplingParams: options.samplingParams,
 		maxTokens: options.maxTokens,
 		reasoning: options.reasoning,
 		cacheRetention: options.cacheRetention,
@@ -336,6 +338,7 @@ function processProxyEvent(
 		case "toolcall_end": {
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
+				Object.assign(content, proxyEvent.toolCall);
 				delete (content as any).partialJson;
 				return {
 					type: "toolcall_end",

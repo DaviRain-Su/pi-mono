@@ -238,7 +238,7 @@ export interface ExtensionBindings {
 
 /** Options for AgentSession.prompt() */
 export interface PromptOptions {
-	/** Whether to expand file-based prompt templates (default: true) */
+	/** Whether to dispatch extension commands and expand skill commands and prompt templates (default: true) */
 	expandPromptTemplates?: boolean;
 	/** Image attachments */
 	images?: ImageContent[];
@@ -407,6 +407,7 @@ export class AgentSession {
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
+		model: Model<any>;
 		apiKey?: string;
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
@@ -422,7 +423,9 @@ export class AgentSession {
 			throw error;
 		}
 		if (result && (result.auth.apiKey || result.auth.headers)) {
+			const requestModel = result.auth.baseUrl ? { ...model, baseUrl: result.auth.baseUrl } : model;
 			return {
+				model: requestModel,
 				apiKey: result.auth.apiKey,
 				headers: withoutDeletedHeaders(result.auth.headers),
 				env: result.env,
@@ -441,6 +444,7 @@ export class AgentSession {
 	}
 
 	private async _getSummarizationRequestAuth(model: Model<any>): Promise<{
+		model: Model<any>;
 		apiKey?: string;
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
@@ -451,11 +455,16 @@ export class AgentSession {
 
 		try {
 			const result = await this._modelRuntime.getAuth(model);
-			return result
-				? { apiKey: result.auth.apiKey, headers: withoutDeletedHeaders(result.auth.headers), env: result.env }
-				: {};
+			if (!result) return { model };
+			const requestModel = result.auth.baseUrl ? { ...model, baseUrl: result.auth.baseUrl } : model;
+			return {
+				model: requestModel,
+				apiKey: result.auth.apiKey,
+				headers: withoutDeletedHeaders(result.auth.headers),
+				env: result.env,
+			};
 		} catch {
-			return {};
+			return { model };
 		}
 	}
 
@@ -1440,7 +1449,7 @@ export class AgentSession {
 		} satisfies CustomMessage<T>;
 		if (options?.deliverAs === "nextTurn") {
 			this._pendingNextTurnMessages.push(appMessage);
-		} else if (this.isStreaming) {
+		} else if (this.isStreaming && options?.triggerTurn !== false) {
 			if (options?.deliverAs === "followUp") {
 				this.agent.followUp(appMessage);
 			} else {
@@ -1467,10 +1476,11 @@ export class AgentSession {
 	 *
 	 * @param content User message content (string or content array)
 	 * @param options.deliverAs Delivery mode when streaming: "steer" or "followUp"
+	 * @param options.expandPromptTemplates Whether to dispatch extension commands and expand skill commands and prompt templates. Default: false.
 	 */
 	async sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
-		options?: { deliverAs?: "steer" | "followUp" },
+		options?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
 	): Promise<void> {
 		// Normalize content to text string + optional images
 		let text: string;
@@ -1492,9 +1502,8 @@ export class AgentSession {
 			if (images.length === 0) images = undefined;
 		}
 
-		// Use prompt() with expandPromptTemplates: false to skip command handling and template expansion
 		await this.prompt(text, {
-			expandPromptTemplates: false,
+			expandPromptTemplates: options?.expandPromptTemplates ?? false,
 			streamingBehavior: options?.deliverAs,
 			images,
 			source: "extension",
@@ -1605,13 +1614,12 @@ export class AgentSession {
 	}
 
 	private async _cycleScopedModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
-		const checks = await Promise.all(
-			this._scopedModels.map(async (scoped) => ({
-				scoped,
-				auth: await this._modelRuntime.checkAuth(scoped.model.provider),
-			})),
+		const availableIds = new Set(
+			this._modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}\0${model.id}`),
 		);
-		const scopedModels = checks.filter(({ auth }) => auth !== undefined).map(({ scoped }) => scoped);
+		const scopedModels = this._scopedModels.filter((scoped) =>
+			availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`),
+		);
 		if (scopedModels.length <= 1) return undefined;
 
 		const currentModel = this.model;
@@ -1640,7 +1648,7 @@ export class AgentSession {
 	}
 
 	private async _cycleAvailableModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
-		const availableModels = await this._modelRuntime.getAvailable();
+		const availableModels = this._modelRuntime.getAvailableSnapshot();
 		if (availableModels.length <= 1) return undefined;
 
 		const currentModel = this.model;
@@ -1789,7 +1797,7 @@ export class AgentSession {
 				throw new Error(formatNoModelSelectedMessage());
 			}
 
-			const { apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model);
+			const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model);
 
 			const pathEntries = this.sessionManager.getBranch();
 			const settings = this.settingsManager.getCompactionSettings();
@@ -1845,7 +1853,7 @@ export class AgentSession {
 				// Generate compaction result
 				const result = await compact(
 					preparation,
-					this.model,
+					requestModel,
 					apiKey,
 					headers,
 					customInstructions,
@@ -1896,6 +1904,8 @@ export class AgentSession {
 				usage,
 				details,
 			};
+			// compaction_end listeners may submit queued prompts, so expose idle state before notifying them.
+			this._compactionAbortController = undefined;
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
@@ -1907,6 +1917,7 @@ export class AgentSession {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const aborted = message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError");
+			this._compactionAbortController = undefined;
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
@@ -2053,14 +2064,7 @@ export class AgentSession {
 				return false;
 			}
 
-			let apiKey: string | undefined;
-			let headers: Record<string, string> | undefined;
-			let env: Record<string, string> | undefined;
-			if (this.agent.streamFunction === streamSimple) {
-				({ apiKey, headers, env } = await this._getRequiredRequestAuth(this.model));
-			} else {
-				({ apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model));
-			}
+			const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model);
 
 			const pathEntries = this.sessionManager.getBranch();
 
@@ -2121,7 +2125,7 @@ export class AgentSession {
 				// Generate compaction result
 				const compactResult = await compact(
 					preparation,
-					this.model,
+					requestModel,
 					apiKey,
 					headers,
 					undefined,
@@ -2604,8 +2608,10 @@ export class AgentSession {
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
-		const previousFlagValues = this._extensionRunner.getFlagValues();
-		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
+		const oldRunner = this._extensionRunner;
+		const previousFlagValues = oldRunner.getFlagValues();
+		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
+		oldRunner.invalidate();
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
@@ -2986,10 +2992,10 @@ export class AgentSession {
 			let summaryUsage: Usage | undefined;
 			if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
 				const model = this.model!;
-				const { apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
+				const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
 				const result = await generateBranchSummary(entriesToSummarize, {
-					model,
+					model: requestModel,
 					apiKey,
 					headers,
 					env,
@@ -3214,11 +3220,13 @@ export class AgentSession {
 	/**
 	 * Export session to HTML.
 	 * @param outputPath Optional output path (defaults to session directory)
+	 * @param options Optional export presentation settings
 	 * @returns Path to exported file
 	 */
-	async exportToHtml(outputPath?: string): Promise<string> {
-		const configuredThemeName = this.settingsManager.getTheme();
-		const themeName = configuredThemeName && getThemeByName(configuredThemeName) ? configuredThemeName : undefined;
+	async exportToHtml(outputPath?: string, options: { themeName?: string } = {}): Promise<string> {
+		const themeName = [options.themeName, this.settingsManager.getTheme()].find(
+			(candidate) => candidate !== undefined && getThemeByName(candidate) !== undefined,
+		);
 
 		// Create tool renderer if we have an extension runner (for custom tool HTML rendering)
 		const toolRenderer: ToolHtmlRenderer = createToolHtmlRenderer({
