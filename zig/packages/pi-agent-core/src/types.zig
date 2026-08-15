@@ -178,6 +178,7 @@ pub const AgentTool = struct {
     description: []const u8,
     label: []const u8,
     parameters: std.json.Value,
+    constrained_sampling: ?pi_types.ConstrainedSamplingConfig = null,
     source: AgentToolSource = .custom,
     prepare_arguments: ?PrepareArgumentsFn = null,
     invalid_arguments_result: ?InvalidArgumentsResultFn = null,

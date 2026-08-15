@@ -6,6 +6,7 @@ const transform_messages = @import("../shared/transform_messages.zig");
 const sanitize_unicode = @import("../shared/sanitize_unicode.zig");
 const string_utils = @import("../shared/string_utils.zig");
 const sampling_params = @import("../shared/sampling_params.zig");
+const constrained_sampling = @import("../shared/constrained_sampling.zig");
 
 const putBoolValue = provider_json_put.putBoolValue;
 const putStringValue = provider_json_put.putStringValue;
@@ -1354,9 +1355,15 @@ fn buildToolObject(allocator: std.mem.Allocator, tool: types.Tool, compat: OpenA
         errdefer provider_json.freeValue(allocator, .{ .object = func_obj });
         try putStringValue(allocator, &func_obj, "name", tool.name);
         try putStringValue(allocator, &func_obj, "description", tool.description);
-        try putObjectValue(allocator, &func_obj, "parameters", try provider_json.cloneValue(allocator, tool.parameters));
-        if (compat.supports_strict_mode) {
-            try putBoolValue(allocator, &func_obj, "strict", false);
+        const resolved = try constrained_sampling.resolveFunctionToolSchema(
+            allocator,
+            tool,
+            compat.supports_strict_mode,
+            false,
+        );
+        try putObjectValue(allocator, &func_obj, "parameters", resolved.parameters);
+        if (resolved.strict) |strict| {
+            try putBoolValue(allocator, &func_obj, "strict", strict);
         }
         break :blk .{ .object = func_obj };
     };
@@ -1422,6 +1429,46 @@ test "Together compat uses non-standard chat payload fields" {
     const tool = payload.object.get("tools").?.array.items[0].object;
     const function = tool.get("function").?.object;
     try std.testing.expect(function.get("strict") == null);
+}
+
+test "chat payload honors constrained sampling when strict mode is supported" {
+    const allocator = std.testing.allocator;
+
+    var schema = std.json.Value{ .object = try std.json.ObjectMap.init(allocator, &[_][]const u8{}, &[_]std.json.Value{}) };
+    defer provider_json.freeValue(allocator, schema);
+    try putStringValue(allocator, &schema.object, "type", "object");
+
+    const model = types.Model{
+        .id = "gpt-4.1",
+        .name = "GPT-4.1",
+        .api = "openai-completions",
+        .provider = "openai",
+        .base_url = "https://api.openai.com/v1",
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 128000,
+        .max_tokens = 16384,
+    };
+    const payload = try buildRequestPayload(allocator, model, .{
+        .messages = &[_]types.Message{},
+        .tools = &[_]types.Tool{
+            .{
+                .name = "plain",
+                .description = "Plain",
+                .parameters = schema,
+            },
+            .{
+                .name = "strict",
+                .description = "Strict",
+                .parameters = schema,
+                .constrained_sampling = .{ .json_schema = .{ .strict = .prefer } },
+            },
+        },
+    }, null);
+    defer provider_json.freeValue(allocator, payload);
+
+    const tools = payload.object.get("tools").?.array.items;
+    try std.testing.expectEqual(false, tools[0].object.get("function").?.object.get("strict").?.bool);
+    try std.testing.expectEqual(true, tools[1].object.get("function").?.object.get("strict").?.bool);
 }
 
 test "chat payload merges samplingParams last" {

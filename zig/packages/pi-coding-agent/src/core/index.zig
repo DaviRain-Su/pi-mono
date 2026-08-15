@@ -1,3 +1,4 @@
+pub const experimental = @import("experimental.zig");
 pub const bash_executor = @import("bash_executor.zig");
 pub const compaction = @import("compaction/index.zig");
 pub const event_bus = @import("event_bus.zig");
@@ -6,6 +7,7 @@ pub const skills = @import("skills.zig");
 pub const source_info = @import("source_info.zig");
 
 test {
+    _ = experimental;
     _ = bash_executor;
     _ = compaction;
     _ = event_bus;

@@ -226,6 +226,7 @@ fn convertToolsToLlm(
             .name = tool.name,
             .description = tool.description,
             .parameters = tool.parameters,
+            .constrained_sampling = tool.constrained_sampling,
         };
     }
     return converted;

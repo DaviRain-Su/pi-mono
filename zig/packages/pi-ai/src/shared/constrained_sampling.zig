@@ -215,6 +215,52 @@ pub fn getJsonSchemaToolParameters(
     return provider_json.cloneValue(allocator, tool.parameters);
 }
 
+pub const ResolvedFunctionToolSchema = struct {
+    parameters: std.json.Value,
+    /// Value to send as `strict`. Null means omit, or emit JSON null on Codex.
+    strict: ?bool,
+};
+
+/// Port of TS `resolveJsonSchemaStrictSampling`.
+pub fn resolveJsonSchemaStrictSampling(
+    allocator: std.mem.Allocator,
+    tool: types.Tool,
+    supports_strict_mode: bool,
+) !?bool {
+    const config = tool.constrained_sampling orelse return null;
+    switch (config) {
+        .disabled, .grammar => return null,
+        .json_schema => |json_schema| {
+            if (supports_strict_mode) {
+                const probed = makeStrictJsonSchema(allocator, tool.parameters) catch |err| {
+                    if (err == error.UnsupportedStrictJsonSchema) {
+                        if (json_schema.strict != .require) return null;
+                    }
+                    return err;
+                };
+                provider_json.freeValue(allocator, probed);
+                return true;
+            }
+            if (json_schema.strict == .require) return error.StrictToolsUnsupported;
+            return null;
+        },
+    }
+}
+
+pub fn resolveFunctionToolSchema(
+    allocator: std.mem.Allocator,
+    tool: types.Tool,
+    supports_strict_mode: bool,
+    default_strict: ?bool,
+) !ResolvedFunctionToolSchema {
+    const constrained = try resolveJsonSchemaStrictSampling(allocator, tool, supports_strict_mode);
+    const strict = constrained orelse default_strict;
+    return .{
+        .parameters = try getJsonSchemaToolParameters(allocator, tool, strict == true),
+        .strict = if (supports_strict_mode) strict else null,
+    };
+}
+
 test "makeStrictJsonSchema requires optional properties and forbids extras" {
     const allocator = std.testing.allocator;
 
@@ -246,4 +292,35 @@ test "makeStrictJsonSchema rejects $ref" {
     try schema.put(allocator, try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, "object") });
     try schema.put(allocator, try allocator.dupe(u8, "$ref"), .{ .string = try allocator.dupe(u8, "#/defs/x") });
     try std.testing.expectError(error.UnsupportedStrictJsonSchema, makeStrictJsonSchema(allocator, .{ .object = schema }));
+}
+
+test "resolveJsonSchemaStrictSampling prefers strict when schema converts" {
+    const allocator = std.testing.allocator;
+    var schema = try provider_json.initObject(allocator);
+    defer provider_json.freeValue(allocator, .{ .object = schema });
+    try schema.put(allocator, try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, "object") });
+
+    const tool = types.Tool{
+        .name = "lookup",
+        .description = "Lookup",
+        .parameters = .{ .object = schema },
+        .constrained_sampling = .{ .json_schema = .{ .strict = .prefer } },
+    };
+    try std.testing.expectEqual(@as(?bool, true), try resolveJsonSchemaStrictSampling(allocator, tool, true));
+    try std.testing.expectEqual(@as(?bool, null), try resolveJsonSchemaStrictSampling(allocator, tool, false));
+}
+
+test "resolveJsonSchemaStrictSampling require fails when strict is unsupported" {
+    const allocator = std.testing.allocator;
+    var schema = try provider_json.initObject(allocator);
+    defer provider_json.freeValue(allocator, .{ .object = schema });
+    try schema.put(allocator, try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, "object") });
+
+    const tool = types.Tool{
+        .name = "lookup",
+        .description = "Lookup",
+        .parameters = .{ .object = schema },
+        .constrained_sampling = .{ .json_schema = .{ .strict = .require } },
+    };
+    try std.testing.expectError(error.StrictToolsUnsupported, resolveJsonSchemaStrictSampling(allocator, tool, false));
 }

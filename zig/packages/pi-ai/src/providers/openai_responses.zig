@@ -20,6 +20,7 @@ const putObjectValue = provider_json_put.putObjectValue;
 const sse_loop = @import("../shared/sse_loop.zig");
 const stop_reason_mod = @import("../shared/stop_reason.zig");
 const deferred_tools = @import("../shared/deferred_tools.zig");
+const constrained_sampling = @import("../shared/constrained_sampling.zig");
 const sampling_params = @import("../shared/sampling_params.zig");
 const responses_api = @import("../shared/responses_api.zig");
 const openai_usage = @import("../shared/openai_usage.zig");
@@ -68,6 +69,7 @@ const ResponsesCompat = struct {
     supports_long_cache_retention: bool = true,
     supports_additional_tools: bool = false,
     supports_tool_search: bool = false,
+    supports_strict_mode: bool = true,
 };
 
 pub const OpenAIResponsesProvider = struct {
@@ -1042,8 +1044,29 @@ const ToolItem = struct {
     name: []const u8,
     description: []const u8,
     parameters: std.json.Value, // cloned
-    strict: bool = false,
+    strict: ?bool = null,
     defer_loading: ?bool = null,
+
+    pub fn jsonStringify(self: ToolItem, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("type");
+        try jw.write(self.type);
+        try jw.objectField("name");
+        try jw.write(self.name);
+        try jw.objectField("description");
+        try jw.write(self.description);
+        try jw.objectField("parameters");
+        try jw.write(self.parameters);
+        if (self.strict) |strict| {
+            try jw.objectField("strict");
+            try jw.write(strict);
+        }
+        if (self.defer_loading) |defer_loading| {
+            try jw.objectField("defer_loading");
+            try jw.write(defer_loading);
+        }
+        try jw.endObject();
+    }
 };
 
 const ContentPart = union(enum) {
@@ -1312,6 +1335,7 @@ const OwnedPayloadBuilder = struct {
     deferred_mode: ?deferred_tools.DeferredToolsMode = null,
     deferred: ?*const std.StringHashMap(types.Tool) = null,
     loaded_tool_names: ?*std.StringHashMap(void) = null,
+    supports_strict_mode: bool = true,
 
     fn deinit(self: *OwnedPayloadBuilder) void {
         for (self.content_lists.items) |list| self.allocator.free(list);
@@ -1349,6 +1373,7 @@ fn buildOwnedPayload(
     builder.deferred_mode = deferred_mode;
     builder.deferred = &tool_split.deferred;
     builder.loaded_tool_names = &loaded_tool_names;
+    builder.supports_strict_mode = compat.supports_strict_mode;
 
     var input_list = std.ArrayList(InputItem).empty;
     errdefer input_list.deinit(allocator);
@@ -1721,12 +1746,18 @@ fn convertToolItem(
     builder: *OwnedPayloadBuilder,
     defer_loading: bool,
 ) !ToolItem {
-    const params_clone = try provider_json.cloneValue(allocator, tool.parameters);
-    try builder.owned_values.append(allocator, params_clone);
+    const resolved = try constrained_sampling.resolveFunctionToolSchema(
+        allocator,
+        tool,
+        builder.supports_strict_mode,
+        false,
+    );
+    try builder.owned_values.append(allocator, resolved.parameters);
     return .{
         .name = tool.name,
         .description = tool.description,
-        .parameters = params_clone,
+        .parameters = resolved.parameters,
+        .strict = resolved.strict,
         .defer_loading = if (defer_loading) true else null,
     };
 }
@@ -1775,7 +1806,13 @@ fn appendDeferredToolsAfterResult(
                 if (index > 0) try query_buf.append(allocator, ' ');
                 try query_buf.appendSlice(allocator, name);
             }
-            const hash_input = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ tool_result.tool_call_id, query_buf.items });
+            var hash_names = std.ArrayList(u8).empty;
+            defer hash_names.deinit(allocator);
+            for (loaded_names.items, 0..) |name, index| {
+                if (index > 0) try hash_names.append(allocator, ',');
+                try hash_names.appendSlice(allocator, name);
+            }
+            const hash_input = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ tool_result.tool_call_id, hash_names.items });
             defer allocator.free(hash_input);
             const digest = try shortHash(allocator, hash_input);
             defer allocator.free(digest);
@@ -2365,6 +2402,7 @@ fn getCompat(model: types.Model) ResponsesCompat {
         .supports_long_cache_retention = compatBoolField(model.compat, "supportsLongCacheRetention") orelse true,
         .supports_additional_tools = compatBoolField(model.compat, "supportsAdditionalTools") orelse false,
         .supports_tool_search = compatBoolField(model.compat, "supportsToolSearch") orelse false,
+        .supports_strict_mode = compatBoolField(model.compat, "supportsStrictMode") orelse true,
     };
 }
 
@@ -3746,6 +3784,47 @@ test "buildRequestPayload emits additional_tools for deferred names" {
         try std.testing.expectEqualStrings("read", item.object.get("tools").?.array.items[0].object.get("name").?.string);
     }
     try std.testing.expect(saw_additional);
+}
+
+test "buildRequestPayload honors constrained sampling on Responses tools" {
+    const allocator = std.testing.allocator;
+
+    var schema = try initObject(allocator);
+    defer provider_json.freeValue(allocator, .{ .object = schema });
+    try schema.put(allocator, try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, "object") });
+    try schema.put(allocator, try allocator.dupe(u8, "additionalProperties"), .{ .bool = false });
+
+    const tools = [_]types.Tool{
+        .{ .name = "plain", .description = "Plain", .parameters = .{ .object = schema } },
+        .{
+            .name = "strict",
+            .description = "Strict",
+            .parameters = .{ .object = schema },
+            .constrained_sampling = .{ .json_schema = .{ .strict = .prefer } },
+        },
+    };
+    const model = types.Model{
+        .id = "gpt-5.4",
+        .name = "GPT-5.4",
+        .api = "openai-responses",
+        .provider = "openai",
+        .base_url = "https://api.openai.com/v1",
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 400000,
+        .max_tokens = 128000,
+    };
+    const payload = try buildRequestPayload(allocator, model, .{
+        .messages = &[_]types.Message{.{ .user = .{
+            .content = &[_]types.ContentBlock{.{ .text = .{ .text = "hi" } }},
+            .timestamp = 1,
+        } }},
+        .tools = &tools,
+    }, null);
+    defer provider_json.freeValue(allocator, payload);
+
+    const top_tools = payload.object.get("tools").?.array;
+    try std.testing.expectEqual(false, top_tools.items[0].object.get("strict").?.bool);
+    try std.testing.expectEqual(true, top_tools.items[1].object.get("strict").?.bool);
 }
 
 test "buildRequestPayload merges samplingParams last" {

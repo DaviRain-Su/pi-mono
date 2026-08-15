@@ -21,6 +21,9 @@ const responses_api = @import("../shared/responses_api.zig");
 const sse_loop = @import("../shared/sse_loop.zig");
 const stop_reason_mod = @import("../shared/stop_reason.zig");
 const sampling_params = @import("../shared/sampling_params.zig");
+const deferred_tools = @import("../shared/deferred_tools.zig");
+const constrained_sampling = @import("../shared/constrained_sampling.zig");
+const hash_mod = @import("../shared/hash.zig");
 const openai_usage = @import("../shared/openai_usage.zig");
 const openai = @import("openai.zig");
 const openai_responses = @import("openai_responses.zig");
@@ -121,7 +124,17 @@ fn buildResponseItemsForContinuation(
         defer builder.deinit();
         var input_struct = std.ArrayList(CodexInputItem).empty;
         defer input_struct.deinit(allocator);
-        try appendCodexAssistant(allocator, &input_struct, output, 0, &builder);
+        const replay_model = types.Model{
+            .id = output.model,
+            .name = output.model,
+            .api = output.api,
+            .provider = output.provider,
+            .base_url = "",
+            .input_types = &.{},
+            .context_window = 0,
+            .max_tokens = 0,
+        };
+        try appendCodexAssistant(allocator, &input_struct, replay_model, output, 0, &builder);
         for (input_struct.items) |item| {
             const bytes = try std.json.Stringify.valueAlloc(allocator, item, .{
                 .emit_null_optional_fields = false,
@@ -378,7 +391,8 @@ const CodexToolItem = struct {
     name: []const u8,
     description: []const u8,
     parameters: std.json.Value, // cloned
-    strict: ?bool = null, // emitted as null in JSON
+    strict: ?bool = null,
+    defer_loading: ?bool = null,
 
     pub fn jsonStringify(self: CodexToolItem, jw: anytype) !void {
         try jw.beginObject();
@@ -391,7 +405,11 @@ const CodexToolItem = struct {
         try jw.objectField("parameters");
         try jw.write(self.parameters);
         try jw.objectField("strict");
-        try jw.write(@as(?bool, null));
+        try jw.write(self.strict);
+        if (self.defer_loading) |defer_loading| {
+            try jw.objectField("defer_loading");
+            try jw.write(defer_loading);
+        }
         try jw.endObject();
     }
 };
@@ -431,9 +449,13 @@ const CodexInputItem = union(enum) {
         id: ?[]const u8,
         name: []const u8,
         arguments: []const u8, // pre-stringified JSON
+        namespace: ?[]const u8 = null,
     },
     function_call_output_text: struct { call_id: []const u8, output: []const u8 },
     function_call_output_parts: struct { call_id: []const u8, parts: []const CodexContentPart },
+    additional_tools: struct { tools: []const CodexToolItem },
+    tool_search_call: struct { call_id: []const u8, query: []const u8, limit: usize },
+    tool_search_output: struct { call_id: []const u8, tools: []const CodexToolItem },
 
     pub fn jsonStringify(self: CodexInputItem, jw: anytype) !void {
         switch (self) {
@@ -484,6 +506,53 @@ const CodexInputItem = union(enum) {
                 try jw.write(fc.name);
                 try jw.objectField("arguments");
                 try jw.write(fc.arguments);
+                if (fc.namespace) |namespace| {
+                    try jw.objectField("namespace");
+                    try jw.write(namespace);
+                }
+                try jw.endObject();
+            },
+            .additional_tools => |item| {
+                try jw.beginObject();
+                try jw.objectField("type");
+                try jw.write("additional_tools");
+                try jw.objectField("role");
+                try jw.write("developer");
+                try jw.objectField("tools");
+                try jw.write(item.tools);
+                try jw.endObject();
+            },
+            .tool_search_call => |item| {
+                try jw.beginObject();
+                try jw.objectField("type");
+                try jw.write("tool_search_call");
+                try jw.objectField("call_id");
+                try jw.write(item.call_id);
+                try jw.objectField("execution");
+                try jw.write("client");
+                try jw.objectField("status");
+                try jw.write("completed");
+                try jw.objectField("arguments");
+                try jw.beginObject();
+                try jw.objectField("query");
+                try jw.write(item.query);
+                try jw.objectField("limit");
+                try jw.write(item.limit);
+                try jw.endObject();
+                try jw.endObject();
+            },
+            .tool_search_output => |item| {
+                try jw.beginObject();
+                try jw.objectField("type");
+                try jw.write("tool_search_output");
+                try jw.objectField("call_id");
+                try jw.write(item.call_id);
+                try jw.objectField("execution");
+                try jw.write("client");
+                try jw.objectField("status");
+                try jw.write("completed");
+                try jw.objectField("tools");
+                try jw.write(item.tools);
                 try jw.endObject();
             },
             .function_call_output_text => |out| {
@@ -516,6 +585,7 @@ const CodexOwned = struct {
     input_buf: []CodexInputItem,
     tools_buf: ?[]CodexToolItem,
     content_lists: []const []CodexContentPart,
+    tool_item_lists: []const []CodexToolItem,
     owned_strings: []const []const u8,
     owned_values: []std.json.Value,
     include_buf: [][]const u8,
@@ -525,6 +595,8 @@ const CodexOwned = struct {
         if (self.tools_buf) |b| self.allocator.free(b);
         for (self.content_lists) |list| self.allocator.free(list);
         self.allocator.free(self.content_lists);
+        for (self.tool_item_lists) |list| self.allocator.free(list);
+        self.allocator.free(self.tool_item_lists);
         for (self.owned_strings) |s| self.allocator.free(s);
         self.allocator.free(self.owned_strings);
         for (self.owned_values) |v| provider_json.freeValue(self.allocator, v);
@@ -536,18 +608,47 @@ const CodexOwned = struct {
 const CodexBuilder = struct {
     allocator: std.mem.Allocator,
     content_lists: std.ArrayList([]CodexContentPart) = .empty,
+    tool_item_lists: std.ArrayList([]CodexToolItem) = .empty,
     owned_strings: std.ArrayList([]const u8) = .empty,
     owned_values: std.ArrayList(std.json.Value) = .empty,
+    deferred_mode: ?deferred_tools.DeferredToolsMode = null,
+    deferred: ?*const std.StringHashMap(types.Tool) = null,
+    loaded_tool_names: ?*std.StringHashMap(void) = null,
+    supports_strict_mode: bool = true,
 
     fn deinit(self: *CodexBuilder) void {
         for (self.content_lists.items) |list| self.allocator.free(list);
         self.content_lists.deinit(self.allocator);
+        for (self.tool_item_lists.items) |list| self.allocator.free(list);
+        self.tool_item_lists.deinit(self.allocator);
         for (self.owned_strings.items) |s| self.allocator.free(s);
         self.owned_strings.deinit(self.allocator);
         for (self.owned_values.items) |v| provider_json.freeValue(self.allocator, v);
         self.owned_values.deinit(self.allocator);
     }
 };
+
+const CodexCompat = struct {
+    supports_additional_tools: bool = false,
+    supports_tool_search: bool = false,
+    supports_strict_mode: bool = true,
+};
+
+fn compatBoolField(compat: ?std.json.Value, key: []const u8) ?bool {
+    const value = compat orelse return null;
+    if (value != .object) return null;
+    const field = value.object.get(key) orelse return null;
+    if (field != .bool) return null;
+    return field.bool;
+}
+
+fn getCodexCompat(model: types.Model) CodexCompat {
+    return .{
+        .supports_additional_tools = compatBoolField(model.compat, "supportsAdditionalTools") orelse false,
+        .supports_tool_search = compatBoolField(model.compat, "supportsToolSearch") orelse false,
+        .supports_strict_mode = compatBoolField(model.compat, "supportsStrictMode") orelse true,
+    };
+}
 
 fn buildOwnedCodex(
     allocator: std.mem.Allocator,
@@ -557,6 +658,22 @@ fn buildOwnedCodex(
 ) !CodexOwned {
     var builder = CodexBuilder{ .allocator = allocator };
     errdefer builder.deinit();
+
+    const compat = getCodexCompat(model);
+    const deferred_mode: ?deferred_tools.DeferredToolsMode = if (compat.supports_additional_tools)
+        .additional_tools
+    else if (compat.supports_tool_search)
+        .tool_search
+    else
+        null;
+    var tool_split = try deferred_tools.splitDeferredTools(allocator, context, deferred_mode != null);
+    defer tool_split.deinit(allocator);
+    var loaded_tool_names = std.StringHashMap(void).init(allocator);
+    defer loaded_tool_names.deinit();
+    builder.deferred_mode = deferred_mode;
+    builder.deferred = &tool_split.deferred;
+    builder.loaded_tool_names = &loaded_tool_names;
+    builder.supports_strict_mode = compat.supports_strict_mode;
 
     var input_list = std.ArrayList(CodexInputItem).empty;
     errdefer input_list.deinit(allocator);
@@ -603,23 +720,18 @@ fn buildOwnedCodex(
     include_buf[0] = "reasoning.encrypted_content";
 
     var tools_buf: ?[]CodexToolItem = null;
-    if (context.tools) |tools| if (tools.len > 0) {
-        const buf = try allocator.alloc(CodexToolItem, tools.len);
+    if (tool_split.immediate.len > 0) {
+        const buf = try allocator.alloc(CodexToolItem, tool_split.immediate.len);
         errdefer allocator.free(buf);
-        for (tools, 0..) |tool, i| {
-            const params_clone = try provider_json.cloneValue(allocator, tool.parameters);
-            try builder.owned_values.append(allocator, params_clone);
-            buf[i] = .{
-                .name = tool.name,
-                .description = tool.description,
-                .parameters = params_clone,
-            };
+        for (tool_split.immediate, 0..) |tool, i| {
+            buf[i] = try convertCodexToolItem(allocator, tool, &builder, false);
         }
         tools_buf = buf;
-    };
+    }
     errdefer if (tools_buf) |b| allocator.free(b);
 
     const content_lists_slice = try builder.content_lists.toOwnedSlice(allocator);
+    const tool_item_lists_slice = try builder.tool_item_lists.toOwnedSlice(allocator);
     const owned_strings_slice = try builder.owned_strings.toOwnedSlice(allocator);
     const owned_values_slice = try builder.owned_values.toOwnedSlice(allocator);
 
@@ -640,6 +752,7 @@ fn buildOwnedCodex(
         .input_buf = input_buf,
         .tools_buf = tools_buf,
         .content_lists = content_lists_slice,
+        .tool_item_lists = tool_item_lists_slice,
         .owned_strings = owned_strings_slice,
         .owned_values = owned_values_slice,
         .include_buf = include_buf,
@@ -658,7 +771,7 @@ fn appendCodexInputItems(
         .user => |user| try appendCodexUser(allocator, input_list, model, user, builder),
         .assistant => |assistant| {
             if (types.shouldReplayAssistantInProviderContext(assistant)) {
-                try appendCodexAssistant(allocator, input_list, assistant, message_index, builder);
+                try appendCodexAssistant(allocator, input_list, model, assistant, message_index, builder);
             }
         },
         .tool_result => |tool_result| try appendCodexToolResult(allocator, input_list, model, tool_result, builder),
@@ -700,6 +813,7 @@ fn appendCodexUser(
 fn appendCodexAssistant(
     allocator: std.mem.Allocator,
     input_list: *std.ArrayList(CodexInputItem),
+    model: types.Model,
     assistant: types.AssistantMessage,
     message_index: usize,
     builder: *CodexBuilder,
@@ -750,11 +864,27 @@ fn appendCodexAssistant(
             try builder.owned_strings.append(allocator, name_owned);
             const arguments_json = try std.json.Stringify.valueAlloc(allocator, tool_call.arguments, .{});
             try builder.owned_strings.append(allocator, arguments_json);
+
+            var namespace_owned: ?[]const u8 = null;
+            const is_same_model =
+                std.mem.eql(u8, assistant.provider, model.provider) and
+                std.mem.eql(u8, assistant.api, model.api) and
+                std.mem.eql(u8, assistant.model, model.id);
+            const can_replay_namespace = is_same_model or (if (builder.deferred) |deferred| deferred.contains(tool_call.name) else false);
+            if (can_replay_namespace) {
+                if (tool_call.namespace) |namespace| {
+                    const dup = try allocator.dupe(u8, namespace);
+                    try builder.owned_strings.append(allocator, dup);
+                    namespace_owned = dup;
+                }
+            }
+
             try input_list.append(allocator, .{ .function_call = .{
                 .call_id = call_id_owned,
                 .id = id_owned,
                 .name = name_owned,
                 .arguments = arguments_json,
+                .namespace = namespace_owned,
             } });
         }
     }
@@ -821,6 +951,101 @@ fn appendCodexToolResult(
             .call_id = call_id_owned,
             .output = output_text,
         } });
+    }
+
+    try appendCodexDeferredToolsAfterResult(allocator, input_list, tool_result, builder);
+}
+
+fn convertCodexToolItem(
+    allocator: std.mem.Allocator,
+    tool: types.Tool,
+    builder: *CodexBuilder,
+    defer_loading: bool,
+) !CodexToolItem {
+    const resolved = try constrained_sampling.resolveFunctionToolSchema(
+        allocator,
+        tool,
+        builder.supports_strict_mode,
+        null,
+    );
+    try builder.owned_values.append(allocator, resolved.parameters);
+    return .{
+        .name = tool.name,
+        .description = tool.description,
+        .parameters = resolved.parameters,
+        .strict = resolved.strict,
+        .defer_loading = if (defer_loading) true else null,
+    };
+}
+
+fn appendCodexDeferredToolsAfterResult(
+    allocator: std.mem.Allocator,
+    input_list: *std.ArrayList(CodexInputItem),
+    tool_result: types.ToolResultMessage,
+    builder: *CodexBuilder,
+) !void {
+    const mode = builder.deferred_mode orelse return;
+    const deferred = builder.deferred orelse return;
+    const loaded = builder.loaded_tool_names orelse return;
+    const names = tool_result.added_tool_names orelse return;
+    if (names.len == 0) return;
+
+    var loaded_tools = std.ArrayList(CodexToolItem).empty;
+    errdefer loaded_tools.deinit(allocator);
+    var loaded_names = std.ArrayList([]const u8).empty;
+    defer loaded_names.deinit(allocator);
+
+    for (names) |name| {
+        const tool = deferred.get(name) orelse continue;
+        if (loaded.contains(name)) continue;
+        try loaded.put(name, {});
+        try loaded_tools.append(allocator, try convertCodexToolItem(allocator, tool, builder, mode == .tool_search));
+        try loaded_names.append(allocator, name);
+    }
+    if (loaded_tools.items.len == 0) {
+        loaded_tools.deinit(allocator);
+        return;
+    }
+
+    const tools_slice = try loaded_tools.toOwnedSlice(allocator);
+    errdefer allocator.free(tools_slice);
+    try builder.tool_item_lists.append(allocator, tools_slice);
+
+    switch (mode) {
+        .additional_tools => {
+            try input_list.append(allocator, .{ .additional_tools = .{ .tools = tools_slice } });
+        },
+        .tool_search => {
+            var query_buf = std.ArrayList(u8).empty;
+            defer query_buf.deinit(allocator);
+            var hash_names = std.ArrayList(u8).empty;
+            defer hash_names.deinit(allocator);
+            for (loaded_names.items, 0..) |name, index| {
+                if (index > 0) {
+                    try query_buf.append(allocator, ' ');
+                    try hash_names.append(allocator, ',');
+                }
+                try query_buf.appendSlice(allocator, name);
+                try hash_names.appendSlice(allocator, name);
+            }
+            const hash_input = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ tool_result.tool_call_id, hash_names.items });
+            defer allocator.free(hash_input);
+            const digest = try hash_mod.shortHash(allocator, hash_input);
+            defer allocator.free(digest);
+            const call_id = try std.fmt.allocPrint(allocator, "pi_tool_load_{s}", .{digest});
+            try builder.owned_strings.append(allocator, call_id);
+            const query = try allocator.dupe(u8, query_buf.items);
+            try builder.owned_strings.append(allocator, query);
+            try input_list.append(allocator, .{ .tool_search_call = .{
+                .call_id = call_id,
+                .query = query,
+                .limit = loaded_names.items.len,
+            } });
+            try input_list.append(allocator, .{ .tool_search_output = .{
+                .call_id = call_id,
+                .tools = tools_slice,
+            } });
+        },
     }
 }
 
@@ -3327,6 +3552,136 @@ test "buildRequestPayload omits empty tools array" {
     defer provider_json.freeValue(allocator, payload);
 
     try std.testing.expect(payload.object.get("tools") == null);
+}
+
+test "buildRequestPayload emits additional_tools for deferred names" {
+    const allocator = std.testing.allocator;
+
+    var compat = try initObject(allocator);
+    try compat.put(allocator, try allocator.dupe(u8, "supportsAdditionalTools"), .{ .bool = true });
+    const compat_value = std.json.Value{ .object = compat };
+    defer provider_json.freeValue(allocator, compat_value);
+
+    var schema = try initObject(allocator);
+    defer provider_json.freeValue(allocator, .{ .object = schema });
+    try schema.put(allocator, try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, "object") });
+
+    const added = [_][]const u8{"read"};
+    const messages = [_]types.Message{
+        .{ .user = .{
+            .content = &[_]types.ContentBlock{.{ .text = .{ .text = "hi" } }},
+            .timestamp = 1,
+        } },
+        .{ .assistant = .{
+            .content = &[_]types.ContentBlock{.{ .tool_call = .{
+                .id = "call_1",
+                .name = "bash",
+                .arguments = .null,
+            } }},
+            .api = "openai-codex-responses",
+            .provider = "openai-codex",
+            .model = "gpt-5.5",
+            .usage = types.Usage.init(),
+            .stop_reason = .tool_use,
+            .timestamp = 2,
+        } },
+        .{ .tool_result = .{
+            .tool_call_id = "call_1",
+            .tool_name = "bash",
+            .content = &[_]types.ContentBlock{.{ .text = .{ .text = "ok" } }},
+            .added_tool_names = &added,
+            .timestamp = 3,
+        } },
+    };
+    const tools = [_]types.Tool{
+        .{ .name = "bash", .description = "Run", .parameters = .{ .object = schema } },
+        .{ .name = "read", .description = "Read", .parameters = .{ .object = schema } },
+    };
+    const model = types.Model{
+        .id = "gpt-5.5",
+        .name = "GPT-5.5",
+        .api = "openai-codex-responses",
+        .provider = "openai-codex",
+        .base_url = "https://chatgpt.com/backend-api",
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 400000,
+        .max_tokens = 128000,
+        .compat = compat_value,
+    };
+    const payload = try buildRequestPayload(allocator, model, .{
+        .messages = &messages,
+        .tools = &tools,
+    }, null);
+    defer provider_json.freeValue(allocator, payload);
+
+    const top_tools = payload.object.get("tools").?.array;
+    try std.testing.expectEqual(@as(usize, 1), top_tools.items.len);
+    try std.testing.expectEqualStrings("bash", top_tools.items[0].object.get("name").?.string);
+
+    const input = payload.object.get("input").?.array;
+    var saw_additional = false;
+    for (input.items) |item| {
+        if (item != .object) continue;
+        const item_type = item.object.get("type") orelse continue;
+        if (item_type != .string or !std.mem.eql(u8, item_type.string, "additional_tools")) continue;
+        saw_additional = true;
+        try std.testing.expectEqualStrings("developer", item.object.get("role").?.string);
+        try std.testing.expectEqualStrings("read", item.object.get("tools").?.array.items[0].object.get("name").?.string);
+    }
+    try std.testing.expect(saw_additional);
+}
+
+test "buildRequestPayload honors constrained sampling on Codex tools" {
+    const allocator = std.testing.allocator;
+
+    var optional_schema = try initObject(allocator);
+    defer provider_json.freeValue(allocator, .{ .object = optional_schema });
+    try optional_schema.put(allocator, try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, "object") });
+
+    var strict_schema = try initObject(allocator);
+    defer provider_json.freeValue(allocator, .{ .object = strict_schema });
+    try strict_schema.put(allocator, try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, "object") });
+    try strict_schema.put(allocator, try allocator.dupe(u8, "additionalProperties"), .{ .bool = false });
+
+    const tools = [_]types.Tool{
+        .{
+            .name = "optional",
+            .description = "Optional constrained sampling",
+            .parameters = .{ .object = optional_schema },
+            .constrained_sampling = .disabled,
+        },
+        .{
+            .name = "strict",
+            .description = "Strict constrained sampling",
+            .parameters = .{ .object = strict_schema },
+            .constrained_sampling = .{ .json_schema = .{ .strict = .prefer } },
+        },
+    };
+    const model = types.Model{
+        .id = "gpt-5.5",
+        .name = "GPT-5.5",
+        .api = "openai-codex-responses",
+        .provider = "openai-codex",
+        .base_url = "https://chatgpt.com/backend-api",
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 400000,
+        .max_tokens = 128000,
+    };
+    const payload = try buildRequestPayload(allocator, model, .{
+        .messages = &[_]types.Message{.{ .user = .{
+            .content = &[_]types.ContentBlock{.{ .text = .{ .text = "Use a tool" } }},
+            .timestamp = 1,
+        } }},
+        .tools = &tools,
+    }, null);
+    defer provider_json.freeValue(allocator, payload);
+
+    const top_tools = payload.object.get("tools").?.array;
+    try std.testing.expectEqual(@as(usize, 2), top_tools.items.len);
+    try std.testing.expectEqualStrings("optional", top_tools.items[0].object.get("name").?.string);
+    try std.testing.expect(top_tools.items[0].object.get("strict").? == .null);
+    try std.testing.expectEqualStrings("strict", top_tools.items[1].object.get("name").?.string);
+    try std.testing.expectEqual(true, top_tools.items[1].object.get("strict").?.bool);
 }
 
 fn runCodexServiceTierPricingTest(

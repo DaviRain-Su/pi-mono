@@ -435,10 +435,23 @@ pub const Message = union(enum) {
     tool_result: ToolResultMessage,
 };
 
+pub const ConstrainedSamplingStrict = enum { prefer, require };
+
+/// Provider-side constrained sampling for a tool. `disabled` is TS `false`.
+pub const ConstrainedSamplingConfig = union(enum) {
+    disabled,
+    json_schema: struct { strict: ConstrainedSamplingStrict },
+    grammar: struct {
+        openai_lark: ?[]const u8 = null,
+        openai_regex: ?[]const u8 = null,
+    },
+};
+
 pub const Tool = struct {
     name: []const u8,
     description: []const u8,
     parameters: std.json.Value,
+    constrained_sampling: ?ConstrainedSamplingConfig = null,
 };
 
 pub const Context = struct {

@@ -1,11 +1,13 @@
 const std = @import("std");
 const agent = @import("agent");
+const pi_types = @import("pi-types");
 
 pub const ToolDefinition = struct {
     name: []const u8,
     label: []const u8,
     description: []const u8,
     parameters: std.json.Value,
+    constrained_sampling: ?pi_types.ConstrainedSamplingConfig = null,
     prepare_arguments: ?agent.types.PrepareArgumentsFn = null,
     execution_mode: ?agent.types.ToolExecutionMode = null,
     execute: ?agent.types.ExecuteToolFn = null,
@@ -19,6 +21,7 @@ pub fn wrapToolDefinition(definition: ToolDefinition) agent.AgentTool {
         .label = definition.label,
         .description = definition.description,
         .parameters = definition.parameters,
+        .constrained_sampling = definition.constrained_sampling,
         .prepare_arguments = definition.prepare_arguments,
         .execution_mode = definition.execution_mode,
         .execute = definition.execute,
@@ -42,6 +45,7 @@ pub fn createToolDefinitionFromAgentTool(tool: agent.AgentTool) ToolDefinition {
         .label = tool.label,
         .description = tool.description,
         .parameters = tool.parameters,
+        .constrained_sampling = tool.constrained_sampling,
         .prepare_arguments = tool.prepare_arguments,
         .execution_mode = tool.execution_mode,
         .execute = tool.execute,

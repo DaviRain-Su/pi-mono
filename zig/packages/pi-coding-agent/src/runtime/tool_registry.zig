@@ -9,6 +9,7 @@ const resources_mod = @import("../resources/resources.zig");
 const session_mod = @import("../sessions/session.zig");
 const shared = @import("../interactive_mode/shared.zig");
 const tool_selection_mod = @import("../tool_selection.zig");
+const experimental = @import("../core/experimental.zig");
 
 pub const AppContext = shared.AppContext;
 
@@ -280,6 +281,7 @@ fn appendToolIfEnabled(
         .description = description,
         .label = name,
         .parameters = schema,
+        .constrained_sampling = experimental.constrainedSamplingForBuiltin(name),
         .source = .builtin,
         .execute = execute,
         .execute_context = app_context,
