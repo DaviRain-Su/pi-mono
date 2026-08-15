@@ -101,6 +101,7 @@ pub const Settings = struct {
     default_provider: ?[]u8 = null,
     default_model: ?[]u8 = null,
     enabled_models: ?[]const []const u8 = null,
+    default_tools: ?[]const []const u8 = null,
     default_thinking_level: ?agent.ThinkingLevel = null,
     transport: ?ai.types.Transport = null,
     steering_mode: ?QueueModeSetting = null,
@@ -141,6 +142,7 @@ pub const Settings = struct {
         if (self.default_provider) |value| allocator.free(value);
         if (self.default_model) |value| allocator.free(value);
         freeStringList(allocator, self.enabled_models);
+        freeStringList(allocator, self.default_tools);
         if (self.theme) |value| allocator.free(value);
         if (self.session_dir) |value| allocator.free(value);
         freePackageSources(allocator, self.packages);
@@ -157,6 +159,7 @@ pub const Settings = struct {
             .default_provider = if (self.default_provider) |value| try allocator.dupe(u8, value) else null,
             .default_model = if (self.default_model) |value| try allocator.dupe(u8, value) else null,
             .enabled_models = try cloneStringList(allocator, self.enabled_models),
+            .default_tools = try cloneStringList(allocator, self.default_tools),
             .default_thinking_level = self.default_thinking_level,
             .transport = self.transport,
             .steering_mode = self.steering_mode,
@@ -286,6 +289,12 @@ pub const RuntimeConfig = struct {
 
     pub fn treeFilterMode(self: *const RuntimeConfig) TreeFilterMode {
         return self.settings.tree_filter_mode orelse .default;
+    }
+
+    /// Mirrors TS `settingsManager.getDefaultTools()`: project replaces
+    /// global, and an empty array is preserved as "no built-in defaults".
+    pub fn defaultTools(self: *const RuntimeConfig) ?[]const []const u8 {
+        return self.settings.default_tools;
     }
 
     pub fn warningAnthropicExtraUsage(self: *const RuntimeConfig) bool {
@@ -502,6 +511,7 @@ const TOP_LEVEL_SETTINGS: []const SettingFieldSpec = &.{
     .{ .json_key = "defaultProvider", .field = "default_provider", .kind = .string_alloc },
     .{ .json_key = "defaultModel", .field = "default_model", .kind = .string_alloc },
     .{ .json_key = "enabledModels", .field = "enabled_models", .kind = .string_list },
+    .{ .json_key = "defaultTools", .field = "default_tools", .kind = .string_list },
     .{ .json_key = "defaultThinkingLevel", .field = "default_thinking_level", .kind = .thinking_level },
     .{ .json_key = "transport", .field = "transport", .kind = .transport },
     .{ .json_key = "steeringMode", .field = "steering_mode", .kind = .queue_mode },

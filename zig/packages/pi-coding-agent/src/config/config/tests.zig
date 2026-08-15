@@ -125,6 +125,81 @@ test "runtime config merges global and project settings with nested overrides" {
     try std.testing.expectEqualStrings(expected_session_dir, session_dir);
 }
 
+test "runtime config loads defaultTools and lets project settings replace them" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "home/.pi/agent");
+    try tmp.dir.createDirPath(std.testing.io, "project/.pi");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "home/.pi/agent/settings.json",
+        .data =
+        \\{
+        \\  "defaultTools": ["read", "bash"]
+        \\}
+        ,
+    });
+
+    const home_dir = try makeTmpPath(allocator, tmp, "home");
+    defer allocator.free(home_dir);
+    const project_dir = try makeTmpPath(allocator, tmp, "project");
+    defer allocator.free(project_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_dir);
+
+    {
+        var runtime = try loadRuntimeConfig(allocator, std.testing.io, &env_map, project_dir);
+        defer runtime.deinit();
+        defer ai.model_registry.resetForTesting();
+
+        const tools = runtime.defaultTools() orelse return error.TestExpectedEqual;
+        try std.testing.expectEqual(@as(usize, 2), tools.len);
+        try std.testing.expectEqualStrings("read", tools[0]);
+        try std.testing.expectEqualStrings("bash", tools[1]);
+    }
+
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "project/.pi/settings.json",
+        .data =
+        \\{
+        \\  "defaultTools": ["grep"]
+        \\}
+        ,
+    });
+
+    {
+        var runtime = try loadRuntimeConfig(allocator, std.testing.io, &env_map, project_dir);
+        defer runtime.deinit();
+        defer ai.model_registry.resetForTesting();
+
+        const tools = runtime.defaultTools() orelse return error.TestExpectedEqual;
+        try std.testing.expectEqual(@as(usize, 1), tools.len);
+        try std.testing.expectEqualStrings("grep", tools[0]);
+    }
+
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "project/.pi/settings.json",
+        .data =
+        \\{
+        \\  "defaultTools": []
+        \\}
+        ,
+    });
+
+    {
+        var runtime = try loadRuntimeConfig(allocator, std.testing.io, &env_map, project_dir);
+        defer runtime.deinit();
+        defer ai.model_registry.resetForTesting();
+
+        const tools = runtime.defaultTools() orelse return error.TestExpectedEqual;
+        try std.testing.expectEqual(@as(usize, 0), tools.len);
+    }
+}
+
 test "runtime config parses merges and looks up extension policies" {
     const allocator = std.testing.allocator;
     const identity_a = "typescript:local:project:/tmp/policy-a.ts";

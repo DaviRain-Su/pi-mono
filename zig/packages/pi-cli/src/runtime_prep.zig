@@ -62,6 +62,7 @@ pub fn prepareCliRuntime(
         runtimeConfigLoadOptions(options, env_map),
     );
     errdefer runtime_config.deinit();
+    const effective_tools = selected_tools.withDefaultBuiltins(runtime_config.defaultTools());
 
     var resource_bundle = try resources_mod.loadResourceBundle(allocator, io, .{
         .cwd = cwd,
@@ -88,7 +89,7 @@ pub fn prepareCliRuntime(
         cwd,
         &runtime_config,
         resource_bundle.extensions,
-        selected_tools,
+        effective_tools,
     );
     errdefer extension_contributions.deinit();
 
@@ -137,7 +138,7 @@ pub fn prepareCliRuntime(
         .current_date = current_date,
         .custom_prompt = options.system_prompt,
         .append_prompts = options.append_system_prompt orelse &.{},
-        .tool_selection = selected_tools,
+        .tool_selection = effective_tools,
         .context_files = context_files,
         .skills = resource_bundle.skills,
     });

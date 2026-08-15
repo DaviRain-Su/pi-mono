@@ -428,3 +428,15 @@ test "runtime tool registry forwards built-in tool construction" {
     try std.testing.expectEqual(@as(usize, 1), built_tools.items.len);
     try std.testing.expectEqualStrings("read", built_tools.items[0].name);
 }
+
+test "runtime tool registry applies defaultTools to built-ins only" {
+    var app_context = AppContext.init(".", std.testing.io);
+    const selection = tool_selection_mod.ToolSelection.fromCliEx(false, false, null, null)
+        .withDefaultBuiltins(&.{ "grep", "find" });
+    var built_tools = try buildAgentToolsWithSelection(std.testing.allocator, &app_context, selection);
+    defer built_tools.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), built_tools.items.len);
+    try std.testing.expectEqualStrings("grep", built_tools.items[0].name);
+    try std.testing.expectEqualStrings("find", built_tools.items[1].name);
+}

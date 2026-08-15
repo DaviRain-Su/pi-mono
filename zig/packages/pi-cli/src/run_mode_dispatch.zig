@@ -89,7 +89,7 @@ pub fn dispatchRunMode(
         );
     }
 
-    const construction_selected_tools = constructionToolSelection(options, dispatch_options.selected_tools);
+    const construction_selected_tools = constructionToolSelection(options, dispatch_options.selected_tools, prepared.runtime_config.defaultTools());
     return try coding_agent.runInteractiveMode(
         allocator,
         io,
@@ -156,7 +156,7 @@ fn dispatchNonInteractiveMode(
     stderr: *std.Io.Writer,
 ) !u8 {
     const cwd = dispatch_options.cwd;
-    const construction_selected_tools = constructionToolSelection(options, dispatch_options.selected_tools);
+    const construction_selected_tools = constructionToolSelection(options, dispatch_options.selected_tools, prepared.runtime_config.defaultTools());
     var app_context = coding_agent.interactive_mode.AppContext.init(cwd, io);
     var built_tools = try coding_agent.interactive_mode.buildAgentToolsWithExtensionsSelection(allocator, &app_context, construction_selected_tools, .{
         .extensions = prepared.resource_bundle.extensions,
@@ -189,7 +189,7 @@ fn dispatchNonInteractiveMode(
         prepared,
         cwd,
         options,
-        dispatch_options.selected_tools,
+        construction_selected_tools,
         built_tools.items,
     );
 
@@ -325,12 +325,16 @@ fn includeInstalledWasmTools(options: *const cli.Args) bool {
     return false;
 }
 
-fn constructionToolSelection(options: *const cli.Args, selected_tools: tool_selection.ToolSelection) tool_selection.ToolSelection {
+fn constructionToolSelection(
+    options: *const cli.Args,
+    selected_tools: tool_selection.ToolSelection,
+    default_tools: ?[]const []const u8,
+) tool_selection.ToolSelection {
     var result = selected_tools;
     result.include_builtins = includeBuiltinTools(options);
     result.disable_all = options.no_tools;
     if (options.tools) |allowlist| result.allowlist = allowlist;
-    return result;
+    return result.withDefaultBuiltins(default_tools);
 }
 
 const OwnedTsRpcExtensionHostOptions = struct {
