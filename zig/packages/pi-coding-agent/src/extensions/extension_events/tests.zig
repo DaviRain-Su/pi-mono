@@ -532,6 +532,41 @@ test "ResultEventBus user_bash returns first result after undefined and errors" 
     try std.testing.expectEqualStrings("UserBashFixtureFailure", bus.errors.items[0].@"error");
 }
 
+fn projectTrustUndecided(event: ExtensionEvent) !EventHandlerResult {
+    try std.testing.expectEqualStrings("/work", event.project_trust.cwd);
+    return .{ .project_trust = .{ .trusted = .undecided } };
+}
+
+fn projectTrustFailure(_: ExtensionEvent) !EventHandlerResult {
+    return error.ProjectTrustFixtureFailure;
+}
+
+fn projectTrustYes(event: ExtensionEvent) !EventHandlerResult {
+    try std.testing.expectEqualStrings("/work", event.project_trust.cwd);
+    return .{ .project_trust = .{ .trusted = .yes, .remember = true } };
+}
+
+fn projectTrustAfterYes(_: ExtensionEvent) !EventHandlerResult {
+    return .{ .project_trust = .{ .trusted = .no } };
+}
+
+test "ResultEventBus project_trust first yes/no wins and isolates errors" {
+    const allocator = testing.allocator;
+    var bus = ResultEventBus.init(allocator);
+    defer bus.deinit();
+
+    try bus.on(.project_trust, projectTrustUndecided, "/tmp/trust-undecided.ts");
+    try bus.on(.project_trust, projectTrustFailure, "/tmp/trust-fail.ts");
+    try bus.on(.project_trust, projectTrustYes, "/tmp/trust-yes.ts");
+    try bus.on(.project_trust, projectTrustAfterYes, "/tmp/trust-after.ts");
+
+    const result = (try bus.emitProjectTrust("/work")).?;
+    try std.testing.expectEqual(extension_events.ProjectTrustDecision.yes, result.trusted);
+    try std.testing.expect(result.remember);
+    try std.testing.expectEqual(@as(usize, 1), bus.errors.items.len);
+    try std.testing.expectEqualStrings("project_trust", bus.errors.items[0].event);
+}
+
 test "extension event conformance helper covers every supported event surface" {
     const names = eventSurfaceNames();
     try std.testing.expectEqual(@typeInfo(ExtensionEventType).@"enum".fields.len, names.len);

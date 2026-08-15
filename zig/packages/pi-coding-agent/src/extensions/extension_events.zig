@@ -4,6 +4,7 @@ const std = @import("std");
 pub const ExtensionEventType = enum {
     // Resource events
     resources_discover,
+    project_trust,
     // Session events
     session_start,
     session_before_switch,
@@ -45,6 +46,7 @@ pub const ExtensionEventType = enum {
 /// Generic extension event
 pub const ExtensionEvent = union(ExtensionEventType) {
     resources_discover: ResourcesDiscoverEvent,
+    project_trust: ProjectTrustEvent,
     session_start: SessionStartEvent,
     session_before_switch: SessionBeforeSwitchEvent,
     session_before_fork: SessionBeforeForkEvent,
@@ -80,6 +82,21 @@ pub const ExtensionEvent = union(ExtensionEventType) {
 pub const ResourcesDiscoverEvent = struct {
     cwd: []const u8,
     reason: []const u8, // "startup" | "reload"
+};
+
+pub const ProjectTrustDecision = enum {
+    yes,
+    no,
+    undecided,
+};
+
+pub const ProjectTrustEvent = struct {
+    cwd: []const u8,
+};
+
+pub const ProjectTrustEventResult = struct {
+    trusted: ProjectTrustDecision,
+    remember: bool = false,
 };
 
 // Session events
@@ -790,6 +807,7 @@ fn invalidReadiness(allocator: std.mem.Allocator, path: []const u8, message: []c
 pub const EventHandlerResult = union(enum) {
     none,
     resources_discover: ResourcesDiscoverResult,
+    project_trust: ProjectTrustEventResult,
     input: InputEventResult,
     tool_result: ToolResultPatch,
     session_before: SessionBeforeResult,
@@ -958,6 +976,26 @@ pub const ResultEventBus = struct {
             }
         }
         return result;
+    }
+
+    /// First yes/no decision wins. `undecided` and handler errors fall through.
+    pub fn emitProjectTrust(self: *ResultEventBus, cwd: []const u8) !?ProjectTrustEventResult {
+        const event = ExtensionEvent{ .project_trust = .{ .cwd = cwd } };
+        for (self.handlers.items) |entry| {
+            if (entry.event_type != .project_trust) continue;
+            const handler_result = entry.handler(event) catch |err| {
+                try self.recordError(entry.extension_path, .project_trust, err);
+                continue;
+            };
+            switch (handler_result) {
+                .project_trust => |result| {
+                    if (result.trusted == .undecided) continue;
+                    return result;
+                },
+                else => {},
+            }
+        }
+        return null;
     }
 
     pub fn emitResourcesDiscover(self: *ResultEventBus, cwd: []const u8, reason: []const u8) !ResourcesDiscoverCombinedResult {

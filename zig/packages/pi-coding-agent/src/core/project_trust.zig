@@ -55,12 +55,23 @@ pub const OwnedTrustEntry = struct {
     }
 };
 
+pub const ExtensionTrustDecision = struct {
+    trusted: bool,
+    remember: bool = false,
+};
+
+pub const ExtensionTrustProbe = struct {
+    ctx: ?*anyopaque = null,
+    func: *const fn (ctx: ?*anyopaque, cwd: []const u8) anyerror!?ExtensionTrustDecision,
+};
+
 pub const ResolveProjectTrustedOptions = struct {
     cwd: []const u8,
     agent_dir: []const u8,
     override: ?bool = null,
     default_project_trust: DefaultProjectTrust = .ask,
     has_ui: bool = false,
+    extension_probe: ?ExtensionTrustProbe = null,
 };
 
 pub const UNTRUSTED_PROJECT_WARNING =
@@ -316,6 +327,16 @@ pub fn resolveProjectTrusted(
 ) !bool {
     if (options.override) |value| return value;
     if (!try hasTrustRequiringProjectResources(allocator, io, env_map, options.cwd)) return true;
+
+    if (options.extension_probe) |probe| {
+        if (try probe.func(probe.ctx, options.cwd)) |decision| {
+            if (decision.remember) {
+                const store = ProjectTrustStore.init(allocator, io, options.agent_dir);
+                try store.set(options.cwd, decision.trusted);
+            }
+            return decision.trusted;
+        }
+    }
 
     var store = ProjectTrustStore.init(allocator, io, options.agent_dir);
     if (try store.get(options.cwd)) |decision| return decision;
@@ -591,6 +612,54 @@ test "resolveProjectTrusted honors override store and defaultProjectTrust" {
         .cwd = project_dir,
         .agent_dir = agent_dir,
         .default_project_trust = .never,
+    }));
+}
+
+fn extensionTrustYes(_: ?*anyopaque, _: []const u8) !?ExtensionTrustDecision {
+    return .{ .trusted = true, .remember = true };
+}
+
+fn extensionTrustSkip(_: ?*anyopaque, _: []const u8) !?ExtensionTrustDecision {
+    return null;
+}
+
+test "resolveProjectTrusted honors extension probe before the trust store" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "agent");
+    try tmp.dir.createDirPath(std.testing.io, "project/.pi");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "project/.pi/settings.json",
+        .data = "{}",
+    });
+
+    const agent_dir = try makeTmpPath(allocator, tmp, "agent");
+    defer allocator.free(agent_dir);
+    const project_dir = try makeTmpPath(allocator, tmp, "project");
+    defer allocator.free(project_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+
+    const store = ProjectTrustStore.init(allocator, std.testing.io, agent_dir);
+    try store.set(project_dir, false);
+
+    try std.testing.expect(try resolveProjectTrusted(allocator, std.testing.io, &env_map, .{
+        .cwd = project_dir,
+        .agent_dir = agent_dir,
+        .default_project_trust = .never,
+        .extension_probe = .{ .func = extensionTrustYes },
+    }));
+    try std.testing.expectEqual(true, (try store.get(project_dir)).?);
+
+    try store.set(project_dir, false);
+    try std.testing.expect(!try resolveProjectTrusted(allocator, std.testing.io, &env_map, .{
+        .cwd = project_dir,
+        .agent_dir = agent_dir,
+        .default_project_trust = .always,
+        .extension_probe = .{ .func = extensionTrustSkip },
     }));
 }
 

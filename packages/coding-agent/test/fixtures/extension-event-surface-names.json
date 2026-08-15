@@ -1,5 +1,6 @@
 [
 	"resources_discover",
+	"project_trust",
 	"session_start",
 	"session_before_switch",
 	"session_before_fork",

@@ -26,6 +26,7 @@ const lifecycle_result_types = [_][]const u8{ "none", "cancellable", "resources"
 const lifecycle_payload_fields = [_][]const u8{ "type", "reason", "previousSessionFile", "targetSessionFile", "cwd", "signal" };
 const lifecycle_all_event_names = [_][]const u8{
     "resources_discover",
+    "project_trust",
     "session_start",
     "session_before_switch",
     "session_before_fork",
