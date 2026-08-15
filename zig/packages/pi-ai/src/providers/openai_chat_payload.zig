@@ -5,6 +5,7 @@ const provider_json_put = @import("../shared/provider_json_put.zig");
 const transform_messages = @import("../shared/transform_messages.zig");
 const sanitize_unicode = @import("../shared/sanitize_unicode.zig");
 const string_utils = @import("../shared/string_utils.zig");
+const sampling_params = @import("../shared/sampling_params.zig");
 
 const putBoolValue = provider_json_put.putBoolValue;
 const putStringValue = provider_json_put.putStringValue;
@@ -430,9 +431,7 @@ pub fn buildPayloadJsonBytesWithCacheRetentionEnv(
 ) ![]u8 {
     var owned = try buildOwnedChat(allocator, model, context, options, pi_cache_retention_env);
     defer owned.deinit();
-    return try std.json.Stringify.valueAlloc(allocator, owned.payload, .{
-        .emit_null_optional_fields = false,
-    });
+    return try sampling_params.stringifyWithSamplingParams(allocator, owned.payload, model, options);
 }
 
 pub fn buildRequestPayloadWithCacheRetentionEnv(
@@ -675,6 +674,7 @@ pub const OpenAICompat = struct {
     cache_control_format: ?[]const u8 = null,
     send_session_affinity_headers: bool = false,
     supports_long_cache_retention: bool = true,
+    supports_finish_reason: bool = true,
 };
 
 /// Comptime-known descriptor for an OpenAI-compatible provider flavor. Each row
@@ -835,6 +835,7 @@ pub fn getCompat(model: types.Model) OpenAICompat {
         .cache_control_format = compatStringField(model.compat, "cacheControlFormat") orelse detected_cache_control_format,
         .send_session_affinity_headers = compatBoolField(model.compat, "sendSessionAffinityHeaders") orelse false,
         .supports_long_cache_retention = compatBoolField(model.compat, "supportsLongCacheRetention") orelse (supports_long_cache_retention orelse true),
+        .supports_finish_reason = compatBoolField(model.compat, "supportsFinishReason") orelse true,
     };
 }
 
@@ -1421,6 +1422,38 @@ test "Together compat uses non-standard chat payload fields" {
     const tool = payload.object.get("tools").?.array.items[0].object;
     const function = tool.get("function").?.object;
     try std.testing.expect(function.get("strict") == null);
+}
+
+test "chat payload merges samplingParams last" {
+    const allocator = std.testing.allocator;
+
+    var model_params = try provider_json.initObject(allocator);
+    try model_params.put(allocator, try allocator.dupe(u8, "top_p"), .{ .float = 0.5 });
+    try model_params.put(allocator, try allocator.dupe(u8, "seed"), .{ .integer = 1 });
+    defer provider_json.freeValue(allocator, .{ .object = model_params });
+
+    var request_params = try provider_json.initObject(allocator);
+    try request_params.put(allocator, try allocator.dupe(u8, "seed"), .{ .integer = 11 });
+    defer provider_json.freeValue(allocator, .{ .object = request_params });
+
+    const model = types.Model{
+        .id = "gpt-4.1",
+        .name = "GPT-4.1",
+        .api = "openai-completions",
+        .provider = "openai",
+        .base_url = "https://api.openai.com/v1",
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 128000,
+        .max_tokens = 16384,
+        .sampling_params = .{ .object = model_params },
+    };
+    const payload = try buildRequestPayload(allocator, model, .{
+        .messages = &[_]types.Message{},
+    }, .{ .sampling_params = .{ .object = request_params } });
+    defer provider_json.freeValue(allocator, payload);
+
+    try std.testing.expectEqual(@as(f64, 0.5), payload.object.get("top_p").?.float);
+    try std.testing.expectEqual(@as(i64, 11), payload.object.get("seed").?.integer);
 }
 
 test "Together reasoning payload preserves supported mapped effort" {

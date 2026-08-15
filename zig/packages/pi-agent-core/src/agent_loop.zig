@@ -177,10 +177,9 @@ fn runLoop(
 
             const tool_calls = try pi_types.collectAssistantToolCalls(allocator, assistant);
             defer allocator.free(tool_calls);
-            has_more_tool_calls = tool_calls.len > 0;
 
-            if (has_more_tool_calls) {
-                const executed_tool_results = try tool_execution.executeToolCalls(
+            if (tool_calls.len > 0) {
+                const executed = try tool_execution.executeToolCalls(
                     allocator,
                     io,
                     current_context,
@@ -191,13 +190,16 @@ fn runLoop(
                     emit,
                     signal,
                 );
-                defer allocator.free(executed_tool_results);
+                defer allocator.free(executed.messages);
+                has_more_tool_calls = !executed.terminate;
 
-                try tool_results.appendSlice(allocator, executed_tool_results);
+                try tool_results.appendSlice(allocator, executed.messages);
                 for (tool_results.items) |tool_result| {
                     try current_messages.append(allocator, .{ .tool_result = tool_result });
                     try new_messages.append(allocator, .{ .tool_result = tool_result });
                 }
+            } else {
+                has_more_tool_calls = false;
             }
 
             try emit(emit_context, .{
@@ -3705,7 +3707,7 @@ test "ISS-404 parallel after_tool_call finalizes in completion order and emits m
         .execute = hookOrderingToolExecute,
     };
 
-    const results = try tool_execution.executeToolCallsParallel(
+    const results = (try tool_execution.executeToolCallsParallel(
         std.testing.allocator,
         std.testing.io,
         .{
@@ -3741,7 +3743,7 @@ test "ISS-404 parallel after_tool_call finalizes in completion order and emits m
         &capture,
         captureParallelHookOrderingEvent,
         null,
-    );
+    )).messages;
     defer {
         for (results) |result| {
             content_clone.deinitContentBlocks(std.testing.allocator, result.content);
@@ -3789,7 +3791,7 @@ test "ISS-401 executeToolCallsParallel returns tool result content that survives
         .execute = capturingEchoToolExecute,
     };
 
-    const results = try tool_execution.executeToolCallsParallel(
+    const results = (try tool_execution.executeToolCallsParallel(
         std.testing.allocator,
         std.testing.io,
         .{
@@ -3824,7 +3826,7 @@ test "ISS-401 executeToolCallsParallel returns tool result content that survives
         null,
         ignoreEvent,
         null,
-    );
+    )).messages;
     defer {
         for (results) |result| {
             content_clone.deinitContentBlocks(std.testing.allocator, result.content);
@@ -3873,7 +3875,7 @@ test "route-a m1 parallel tool updates emit before join and only updates leave m
         .execute = streamingParallelToolExecute,
     };
 
-    const results = try tool_execution.executeToolCallsParallel(
+    const results = (try tool_execution.executeToolCallsParallel(
         std.testing.allocator,
         std.testing.io,
         .{
@@ -3908,7 +3910,7 @@ test "route-a m1 parallel tool updates emit before join and only updates leave m
         &capture,
         captureParallelStreamingEvent,
         null,
-    );
+    )).messages;
     defer {
         for (results) |result| {
             content_clone.deinitContentBlocks(std.testing.allocator, result.content);
@@ -3946,7 +3948,7 @@ test "route-a m1 parallel emitter serializes concurrent update callbacks" {
         .execute = stressStreamingParallelToolExecute,
     };
 
-    const results = try tool_execution.executeToolCallsParallel(
+    const results = (try tool_execution.executeToolCallsParallel(
         std.testing.allocator,
         std.testing.io,
         .{
@@ -3981,7 +3983,7 @@ test "route-a m1 parallel emitter serializes concurrent update callbacks" {
         &capture,
         captureParallelStreamingEvent,
         null,
-    );
+    )).messages;
     defer {
         for (results) |result| {
             content_clone.deinitContentBlocks(std.testing.allocator, result.content);

@@ -177,6 +177,8 @@ pub const ToolCall = struct {
     /// cross-model provider-context conversion must drop it because signatures
     /// are not portable across providers or model families.
     thought_signature: ?[]const u8 = null,
+    /// OpenAI Responses namespace for dynamically loaded or namespaced tools.
+    namespace: ?[]const u8 = null,
 };
 
 pub const ContentBlock = union(enum) {
@@ -389,7 +391,29 @@ pub fn freeToolCall(allocator: std.mem.Allocator, tool_call: ToolCall) void {
     allocator.free(tool_call.id);
     allocator.free(tool_call.name);
     if (tool_call.thought_signature) |signature| allocator.free(signature);
+    if (tool_call.namespace) |namespace| allocator.free(namespace);
     json.freeValue(allocator, tool_call.arguments);
+}
+
+pub fn cloneAddedToolNames(allocator: std.mem.Allocator, names: ?[]const []const u8) !?[]const []const u8 {
+    const source = names orelse return null;
+    const cloned = try allocator.alloc([]const u8, source.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (cloned[0..initialized]) |name| allocator.free(name);
+        allocator.free(cloned);
+    }
+    for (source, 0..) |name, index| {
+        cloned[index] = try allocator.dupe(u8, name);
+        initialized += 1;
+    }
+    return cloned;
+}
+
+pub fn freeAddedToolNames(allocator: std.mem.Allocator, names: ?[]const []const u8) void {
+    const owned = names orelse return;
+    for (owned) |name| allocator.free(name);
+    allocator.free(owned);
 }
 
 pub const ToolResultMessage = struct {
@@ -398,6 +422,9 @@ pub const ToolResultMessage = struct {
     tool_name: []const u8,
     content: []const ContentBlock,
     details: ?std.json.Value = null,
+    /// Names from `Context.tools` that became available after this result.
+    /// Providers with native deferred tool loading use this as the load point.
+    added_tool_names: ?[]const []const u8 = null,
     is_error: bool = false,
     timestamp: i64,
 };
@@ -450,6 +477,9 @@ pub const OpenAICompletionsCompat = struct {
     cache_control_format: ?[]const u8 = null, // "anthropic"
     send_session_affinity_headers: bool = false,
     supports_long_cache_retention: ?bool = null,
+    /// When false, a stream that never emits `finish_reason` is inferred as
+    /// `toolUse`/`stop` instead of becoming a terminal error. Default: true.
+    supports_finish_reason: ?bool = null,
 };
 
 pub const OpenAIResponsesCompat = struct {
@@ -501,6 +531,9 @@ pub const Model = struct {
     max_tokens: u32,
     headers: ?std.StringHashMap([]const u8) = null,
     compat: ?std.json.Value = null, // OpenAICompletionsCompat or OpenAIResponsesCompat
+    /// Default sampling parameters for this model. Per-request
+    /// `StreamOptions.sampling_params` keys override these.
+    sampling_params: ?std.json.Value = null,
 };
 
 pub const GoogleThinkingOptions = struct {
@@ -603,6 +636,10 @@ pub const StreamOptions = struct {
     max_retry_delay_ms: u32 = 60000,
     /// Optional metadata to include in API requests.
     metadata: ?std.json.Value = null,
+    /// Extra sampling keys merged last onto provider payloads (`top_p`,
+    /// `presence_penalty`, `frequency_penalty`, `seed`, `repetition_penalty`).
+    /// Per-request keys override `Model.sampling_params`.
+    sampling_params: ?std.json.Value = null,
 
     /// WebSocket connect timeout in milliseconds (for providers that use WebSocket).
     websocket_connect_timeout_ms: ?u32 = null,
@@ -641,6 +678,7 @@ pub const SimpleStreamOptions = struct {
     on_response: ?*const fn (u16, std.StringHashMap([]const u8), Model) anyerror!void = null,
     max_retry_delay_ms: u32 = 60000,
     metadata: ?std.json.Value = null,
+    sampling_params: ?std.json.Value = null,
     websocket_connect_timeout_ms: ?u32 = null,
     signal: ?*const std.atomic.Value(bool) = null,
     reasoning: ?ThinkingLevel = null,

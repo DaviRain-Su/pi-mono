@@ -46,6 +46,7 @@ pub fn transformMessages(
                     .tool_name = try allocator.dupe(u8, tool_result.tool_name),
                     .content = try cloneUserLikeContent(allocator, tool_result.content, modelSupportsImages(model), NON_VISION_TOOL_IMAGE_PLACEHOLDER),
                     .details = if (tool_result.details) |details| try provider_json.cloneValue(allocator, details) else null,
+                    .added_tool_names = try types.cloneAddedToolNames(allocator, tool_result.added_tool_names),
                     .is_error = tool_result.is_error,
                     .timestamp = tool_result.timestamp,
                 },
@@ -225,6 +226,7 @@ fn cloneToolCallWithTransform(
         .name = try allocator.dupe(u8, tool_call.name),
         .arguments = try provider_json.cloneValue(allocator, tool_call.arguments),
         .thought_signature = if (is_same_model) if (tool_call.thought_signature) |signature| try allocator.dupe(u8, signature) else null else null,
+        .namespace = if (tool_call.namespace) |namespace| try allocator.dupe(u8, namespace) else null,
     };
 }
 
@@ -378,6 +380,7 @@ fn cloneToolCall(allocator: std.mem.Allocator, tool_call: types.ToolCall) !types
         .name = try allocator.dupe(u8, tool_call.name),
         .arguments = try provider_json.cloneValue(allocator, tool_call.arguments),
         .thought_signature = if (tool_call.thought_signature) |signature| try allocator.dupe(u8, signature) else null,
+        .namespace = if (tool_call.namespace) |namespace| try allocator.dupe(u8, namespace) else null,
     };
 }
 
@@ -440,6 +443,7 @@ fn freeMessage(allocator: std.mem.Allocator, message: types.Message) void {
             allocator.free(tool_result.tool_name);
             freeContentBlocks(allocator, tool_result.content);
             if (tool_result.details) |details| provider_json.freeValue(allocator, details);
+            types.freeAddedToolNames(allocator, tool_result.added_tool_names);
         },
         .assistant => |assistant| {
             allocator.free(assistant.api);
@@ -485,6 +489,7 @@ fn freeToolCall(allocator: std.mem.Allocator, tool_call: types.ToolCall) void {
     allocator.free(tool_call.id);
     allocator.free(tool_call.name);
     if (tool_call.thought_signature) |signature| allocator.free(signature);
+    if (tool_call.namespace) |namespace| allocator.free(namespace);
     provider_json.freeValue(allocator, tool_call.arguments);
 }
 

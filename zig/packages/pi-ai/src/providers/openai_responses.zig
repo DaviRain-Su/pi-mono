@@ -19,6 +19,8 @@ const putFloatValue = provider_json_put.putFloatValue;
 const putObjectValue = provider_json_put.putObjectValue;
 const sse_loop = @import("../shared/sse_loop.zig");
 const stop_reason_mod = @import("../shared/stop_reason.zig");
+const deferred_tools = @import("../shared/deferred_tools.zig");
+const sampling_params = @import("../shared/sampling_params.zig");
 const responses_api = @import("../shared/responses_api.zig");
 const openai_usage = @import("../shared/openai_usage.zig");
 const shared_url = @import("../shared/url.zig");
@@ -47,6 +49,7 @@ const ActiveToolCallBlock = struct {
     call_id: ?[]const u8,
     id: ?[]const u8,
     name: ?[]const u8,
+    namespace: ?[]const u8 = null,
     partial_json: std.ArrayList(u8),
 };
 
@@ -63,6 +66,8 @@ const ContinuationAnchor = struct {
 const ResponsesCompat = struct {
     send_session_id_header: bool = true,
     supports_long_cache_retention: bool = true,
+    supports_additional_tools: bool = false,
+    supports_tool_search: bool = false,
 };
 
 pub const OpenAIResponsesProvider = struct {
@@ -304,11 +309,7 @@ fn parseSseStreamLines(
     const effective_service_tier = response_service_tier orelse request_service_tier;
     applyServiceTierPricing(&output.usage, effective_service_tier, model);
 
-    stream_ptr.push(.{
-        .event_type = .done,
-        .message = output,
-    });
-    stream_ptr.end(output);
+    emitResponsesCompletion(stream_ptr, output);
 }
 
 const OpenAIResponsesSseDataResult = enum {
@@ -711,6 +712,7 @@ fn deinitActiveToolCallBlock(allocator: std.mem.Allocator, block: *ActiveToolCal
     if (block.call_id) |value| allocator.free(value);
     if (block.id) |value| allocator.free(value);
     if (block.name) |value| allocator.free(value);
+    if (block.namespace) |value| allocator.free(value);
     block.partial_json.deinit(allocator);
 }
 
@@ -772,6 +774,7 @@ fn updateToolCallRef(
         if (item_value == .object) {
             if (block.id == null) block.id = try extractCombinedToolCallId(allocator, item_value);
             if (block.name == null) block.name = try extractOwnedStringField(allocator, item_value, "name");
+            if (block.namespace == null) block.namespace = try extractOwnedStringField(allocator, item_value, "namespace");
         }
     }
 }
@@ -860,10 +863,13 @@ fn finalizeActiveToolCallAt(
         errdefer allocator.free(id);
         const name = try allocator.dupe(u8, final_name);
         errdefer allocator.free(name);
+        const namespace = if (tool_call.namespace) |value| try allocator.dupe(u8, value) else null;
+        errdefer if (namespace) |value| allocator.free(value);
         break :blk types.ToolCall{
             .id = id,
             .name = name,
             .arguments = arguments,
+            .namespace = namespace,
         };
     };
     var stored_tool_call_owned = true;
@@ -1037,6 +1043,7 @@ const ToolItem = struct {
     description: []const u8,
     parameters: std.json.Value, // cloned
     strict: bool = false,
+    defer_loading: ?bool = null,
 };
 
 const ContentPart = union(enum) {
@@ -1080,6 +1087,9 @@ const InputItem = union(enum) {
     function_call: FunctionCallItem,
     function_call_output_text: FunctionCallOutputTextItem,
     function_call_output_parts: FunctionCallOutputPartsItem,
+    additional_tools: AdditionalToolsItem,
+    tool_search_call: ToolSearchCallItem,
+    tool_search_output: ToolSearchOutputItem,
 
     pub fn jsonStringify(self: InputItem, jw: anytype) !void {
         switch (self) {
@@ -1144,6 +1154,53 @@ const InputItem = union(enum) {
                 try jw.write(fc.name);
                 try jw.objectField("arguments");
                 try jw.write(fc.arguments);
+                if (fc.namespace) |namespace| {
+                    try jw.objectField("namespace");
+                    try jw.write(namespace);
+                }
+                try jw.endObject();
+            },
+            .additional_tools => |item| {
+                try jw.beginObject();
+                try jw.objectField("type");
+                try jw.write("additional_tools");
+                try jw.objectField("role");
+                try jw.write("developer");
+                try jw.objectField("tools");
+                try jw.write(item.tools);
+                try jw.endObject();
+            },
+            .tool_search_call => |item| {
+                try jw.beginObject();
+                try jw.objectField("type");
+                try jw.write("tool_search_call");
+                try jw.objectField("call_id");
+                try jw.write(item.call_id);
+                try jw.objectField("execution");
+                try jw.write("client");
+                try jw.objectField("status");
+                try jw.write("completed");
+                try jw.objectField("arguments");
+                try jw.beginObject();
+                try jw.objectField("query");
+                try jw.write(item.query);
+                try jw.objectField("limit");
+                try jw.write(item.limit);
+                try jw.endObject();
+                try jw.endObject();
+            },
+            .tool_search_output => |item| {
+                try jw.beginObject();
+                try jw.objectField("type");
+                try jw.write("tool_search_output");
+                try jw.objectField("call_id");
+                try jw.write(item.call_id);
+                try jw.objectField("execution");
+                try jw.write("client");
+                try jw.objectField("status");
+                try jw.write("completed");
+                try jw.objectField("tools");
+                try jw.write(item.tools);
                 try jw.endObject();
             },
             .function_call_output_text => |out| {
@@ -1190,6 +1247,22 @@ const FunctionCallItem = struct {
     id: ?[]const u8 = null,
     name: []const u8,
     arguments: []const u8, // pre-stringified JSON
+    namespace: ?[]const u8 = null,
+};
+
+const AdditionalToolsItem = struct {
+    tools: []const ToolItem,
+};
+
+const ToolSearchCallItem = struct {
+    call_id: []const u8,
+    query: []const u8,
+    limit: usize,
+};
+
+const ToolSearchOutputItem = struct {
+    call_id: []const u8,
+    tools: []const ToolItem,
 };
 
 const FunctionCallOutputTextItem = struct {
@@ -1208,6 +1281,7 @@ const OwnedPayload = struct {
     input_buf: []InputItem,
     tools_buf: ?[]ToolItem,
     content_lists: []const []ContentPart,
+    tool_item_lists: []const []ToolItem,
     owned_strings: []const []const u8,
     owned_values: []std.json.Value,
     metadata_clone: ?std.json.Value,
@@ -1218,6 +1292,8 @@ const OwnedPayload = struct {
         if (self.tools_buf) |b| self.allocator.free(b);
         for (self.content_lists) |list| self.allocator.free(list);
         self.allocator.free(self.content_lists);
+        for (self.tool_item_lists) |list| self.allocator.free(list);
+        self.allocator.free(self.tool_item_lists);
         for (self.owned_strings) |s| self.allocator.free(s);
         self.allocator.free(self.owned_strings);
         for (self.owned_values) |v| provider_json.freeValue(self.allocator, v);
@@ -1230,12 +1306,18 @@ const OwnedPayload = struct {
 const OwnedPayloadBuilder = struct {
     allocator: std.mem.Allocator,
     content_lists: std.ArrayList([]ContentPart) = .empty,
+    tool_item_lists: std.ArrayList([]ToolItem) = .empty,
     owned_strings: std.ArrayList([]const u8) = .empty,
     owned_values: std.ArrayList(std.json.Value) = .empty,
+    deferred_mode: ?deferred_tools.DeferredToolsMode = null,
+    deferred: ?*const std.StringHashMap(types.Tool) = null,
+    loaded_tool_names: ?*std.StringHashMap(void) = null,
 
     fn deinit(self: *OwnedPayloadBuilder) void {
         for (self.content_lists.items) |list| self.allocator.free(list);
         self.content_lists.deinit(self.allocator);
+        for (self.tool_item_lists.items) |list| self.allocator.free(list);
+        self.tool_item_lists.deinit(self.allocator);
         for (self.owned_strings.items) |s| self.allocator.free(s);
         self.owned_strings.deinit(self.allocator);
         for (self.owned_values.items) |v| provider_json.freeValue(self.allocator, v);
@@ -1254,6 +1336,19 @@ fn buildOwnedPayload(
 
     const compat = getCompat(model);
     const cache_retention = resolveOptionsCacheRetention(options, processCacheRetentionEnv());
+    const deferred_mode: ?deferred_tools.DeferredToolsMode = if (compat.supports_additional_tools)
+        .additional_tools
+    else if (compat.supports_tool_search)
+        .tool_search
+    else
+        null;
+    var tool_split = try deferred_tools.splitDeferredTools(allocator, context, deferred_mode != null);
+    defer tool_split.deinit(allocator);
+    var loaded_tool_names = std.StringHashMap(void).init(allocator);
+    defer loaded_tool_names.deinit();
+    builder.deferred_mode = deferred_mode;
+    builder.deferred = &tool_split.deferred;
+    builder.loaded_tool_names = &loaded_tool_names;
 
     var input_list = std.ArrayList(InputItem).empty;
     errdefer input_list.deinit(allocator);
@@ -1331,25 +1426,20 @@ fn buildOwnedPayload(
     }
     errdefer if (include_buf) |b| allocator.free(b);
 
-    // Tools.
+    // Tools: only the immediate (non-deferred) set goes at the top level.
     var tools_buf: ?[]ToolItem = null;
-    if (context.tools) |tools| if (tools.len > 0) {
-        const buf = try allocator.alloc(ToolItem, tools.len);
+    if (tool_split.immediate.len > 0) {
+        const buf = try allocator.alloc(ToolItem, tool_split.immediate.len);
         errdefer allocator.free(buf);
-        for (tools, 0..) |tool, i| {
-            const params_clone = try provider_json.cloneValue(allocator, tool.parameters);
-            try builder.owned_values.append(allocator, params_clone);
-            buf[i] = .{
-                .name = tool.name,
-                .description = tool.description,
-                .parameters = params_clone,
-            };
+        for (tool_split.immediate, 0..) |tool, i| {
+            buf[i] = try convertToolItem(allocator, tool, &builder, false);
         }
         tools_buf = buf;
-    };
+    }
     errdefer if (tools_buf) |b| allocator.free(b);
 
     const content_lists_slice = try builder.content_lists.toOwnedSlice(allocator);
+    const tool_item_lists_slice = try builder.tool_item_lists.toOwnedSlice(allocator);
     const owned_strings_slice = try builder.owned_strings.toOwnedSlice(allocator);
     const owned_values_slice = try builder.owned_values.toOwnedSlice(allocator);
 
@@ -1371,6 +1461,7 @@ fn buildOwnedPayload(
         .input_buf = input_buf,
         .tools_buf = tools_buf,
         .content_lists = content_lists_slice,
+        .tool_item_lists = tool_item_lists_slice,
         .owned_strings = owned_strings_slice,
         .owned_values = owned_values_slice,
         .metadata_clone = metadata_clone,
@@ -1531,11 +1622,22 @@ fn appendAssistantInputItemsStruct(
             const arguments_json = try std.json.Stringify.valueAlloc(allocator, tool_call.arguments, .{});
             try builder.owned_strings.append(allocator, arguments_json);
 
+            var namespace_owned: ?[]const u8 = null;
+            const can_replay_namespace = is_same_model or (if (builder.deferred) |deferred| deferred.contains(tool_call.name) else false);
+            if (can_replay_namespace) {
+                if (tool_call.namespace) |namespace| {
+                    const dup = try allocator.dupe(u8, namespace);
+                    try builder.owned_strings.append(allocator, dup);
+                    namespace_owned = dup;
+                }
+            }
+
             try input_list.append(allocator, .{ .function_call = .{
                 .call_id = call_id_owned,
                 .id = id_owned,
                 .name = name_owned,
                 .arguments = arguments_json,
+                .namespace = namespace_owned,
             } });
         }
     }
@@ -1609,6 +1711,108 @@ fn appendToolResultInputItem(
             .output = output_text,
         } });
     }
+
+    try appendDeferredToolsAfterResult(allocator, input_list, tool_result, builder);
+}
+
+fn convertToolItem(
+    allocator: std.mem.Allocator,
+    tool: types.Tool,
+    builder: *OwnedPayloadBuilder,
+    defer_loading: bool,
+) !ToolItem {
+    const params_clone = try provider_json.cloneValue(allocator, tool.parameters);
+    try builder.owned_values.append(allocator, params_clone);
+    return .{
+        .name = tool.name,
+        .description = tool.description,
+        .parameters = params_clone,
+        .defer_loading = if (defer_loading) true else null,
+    };
+}
+
+fn appendDeferredToolsAfterResult(
+    allocator: std.mem.Allocator,
+    input_list: *std.ArrayList(InputItem),
+    tool_result: types.ToolResultMessage,
+    builder: *OwnedPayloadBuilder,
+) !void {
+    const mode = builder.deferred_mode orelse return;
+    const deferred = builder.deferred orelse return;
+    const loaded = builder.loaded_tool_names orelse return;
+    const names = tool_result.added_tool_names orelse return;
+    if (names.len == 0) return;
+
+    var loaded_tools = std.ArrayList(ToolItem).empty;
+    errdefer loaded_tools.deinit(allocator);
+    var loaded_names = std.ArrayList([]const u8).empty;
+    defer loaded_names.deinit(allocator);
+
+    for (names) |name| {
+        const tool = deferred.get(name) orelse continue;
+        if (loaded.contains(name)) continue;
+        try loaded.put(name, {});
+        try loaded_tools.append(allocator, try convertToolItem(allocator, tool, builder, mode == .tool_search));
+        try loaded_names.append(allocator, name);
+    }
+    if (loaded_tools.items.len == 0) {
+        loaded_tools.deinit(allocator);
+        return;
+    }
+
+    const tools_slice = try loaded_tools.toOwnedSlice(allocator);
+    errdefer allocator.free(tools_slice);
+    try builder.tool_item_lists.append(allocator, tools_slice);
+
+    switch (mode) {
+        .additional_tools => {
+            try input_list.append(allocator, .{ .additional_tools = .{ .tools = tools_slice } });
+        },
+        .tool_search => {
+            var query_buf = std.ArrayList(u8).empty;
+            defer query_buf.deinit(allocator);
+            for (loaded_names.items, 0..) |name, index| {
+                if (index > 0) try query_buf.append(allocator, ' ');
+                try query_buf.appendSlice(allocator, name);
+            }
+            const hash_input = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ tool_result.tool_call_id, query_buf.items });
+            defer allocator.free(hash_input);
+            const digest = try shortHash(allocator, hash_input);
+            defer allocator.free(digest);
+            const call_id = try std.fmt.allocPrint(allocator, "pi_tool_load_{s}", .{digest});
+            try builder.owned_strings.append(allocator, call_id);
+            const query = try allocator.dupe(u8, query_buf.items);
+            try builder.owned_strings.append(allocator, query);
+            try input_list.append(allocator, .{ .tool_search_call = .{
+                .call_id = call_id,
+                .query = query,
+                .limit = loaded_names.items.len,
+            } });
+            try input_list.append(allocator, .{ .tool_search_output = .{
+                .call_id = call_id,
+                .tools = tools_slice,
+            } });
+        },
+    }
+}
+
+fn emitResponsesCompletion(
+    stream_ptr: *event_stream.AssistantMessageEventStream,
+    output: types.AssistantMessage,
+) void {
+    if (output.stop_reason == .error_reason or output.stop_reason == .aborted) {
+        stream_ptr.push(.{
+            .event_type = .error_event,
+            .error_message = output.error_message,
+            .message = output,
+        });
+    } else {
+        stream_ptr.push(.{
+            .event_type = .done,
+            .message = output,
+        });
+    }
+    stream_ptr.end(output);
 }
 
 pub fn buildPayloadJsonBytes(
@@ -1619,9 +1823,7 @@ pub fn buildPayloadJsonBytes(
 ) ![]u8 {
     var owned = try buildOwnedPayload(allocator, model, context, options);
     defer owned.deinit();
-    return try std.json.Stringify.valueAlloc(allocator, owned.payload, .{
-        .emit_null_optional_fields = false,
-    });
+    return try sampling_params.stringifyWithSamplingParams(allocator, owned.payload, model, options);
 }
 
 fn modelSupportsImages(model: types.Model) bool {
@@ -2048,7 +2250,13 @@ fn updateCompletedResponse(
     }
 
     if (extractStringField(response_value, "status")) |status| {
-        output.stop_reason = mapStopReason(status);
+        const incomplete_reason = extractIncompleteReason(response_value);
+        const mapped = try mapOpenAIResponsesStatus(allocator, status, incomplete_reason);
+        output.stop_reason = mapped.stop_reason;
+        if (mapped.error_message) |message| {
+            if (output.error_message) |previous| allocator.free(previous);
+            output.error_message = message;
+        }
     }
 }
 
@@ -2135,8 +2343,18 @@ fn parseStreamingJsonToValue(allocator: std.mem.Allocator, input: []const u8) !s
     return try provider_json.cloneValue(allocator, parsed.value);
 }
 
-fn mapStopReason(status: []const u8) types.StopReason {
-    return stop_reason_mod.mapStopReasonFromTable(&stop_reason_mod.openai_responses_mappings, status, .error_reason);
+fn extractIncompleteReason(response_value: std.json.Value) ?[]const u8 {
+    if (response_value != .object) return null;
+    const details = response_value.object.get("incomplete_details") orelse return null;
+    return extractStringField(details, "reason");
+}
+
+fn mapOpenAIResponsesStatus(
+    allocator: std.mem.Allocator,
+    status: []const u8,
+    incomplete_reason: ?[]const u8,
+) !stop_reason_mod.StopReasonResult {
+    return stop_reason_mod.mapOpenAIResponsesStatus(allocator, status, incomplete_reason);
 }
 
 const jsonIntegerToU32 = openai_usage.jsonIntegerToU32;
@@ -2145,6 +2363,8 @@ fn getCompat(model: types.Model) ResponsesCompat {
     return .{
         .send_session_id_header = compatBoolField(model.compat, "sendSessionIdHeader") orelse true,
         .supports_long_cache_retention = compatBoolField(model.compat, "supportsLongCacheRetention") orelse true,
+        .supports_additional_tools = compatBoolField(model.compat, "supportsAdditionalTools") orelse false,
+        .supports_tool_search = compatBoolField(model.compat, "supportsToolSearch") orelse false,
     };
 }
 
@@ -2203,11 +2423,14 @@ fn cloneToolCallOwned(allocator: std.mem.Allocator, tool_call: types.ToolCall) !
     const arguments = try provider_json.cloneValue(allocator, tool_call.arguments);
     errdefer provider_json.freeValue(allocator, arguments);
     const thought_signature = if (tool_call.thought_signature) |signature| try allocator.dupe(u8, signature) else null;
+    errdefer if (thought_signature) |signature| allocator.free(signature);
+    const namespace = if (tool_call.namespace) |value| try allocator.dupe(u8, value) else null;
     return .{
         .id = id,
         .name = name,
         .arguments = arguments,
         .thought_signature = thought_signature,
+        .namespace = namespace,
     };
 }
 
@@ -3446,6 +3669,117 @@ test "buildRequestPayload omits empty tools array" {
     defer provider_json.freeValue(allocator, payload);
 
     try std.testing.expect(payload.object.get("tools") == null);
+}
+
+test "buildRequestPayload emits additional_tools for deferred names" {
+    const allocator = std.testing.allocator;
+
+    var compat = try initObject(allocator);
+    try compat.put(allocator, try allocator.dupe(u8, "supportsAdditionalTools"), .{ .bool = true });
+    const compat_value = std.json.Value{ .object = compat };
+    defer provider_json.freeValue(allocator, compat_value);
+
+    var schema = try initObject(allocator);
+    defer provider_json.freeValue(allocator, .{ .object = schema });
+    try schema.put(allocator, try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, "object") });
+
+    const added = [_][]const u8{"read"};
+    const messages = [_]types.Message{
+        .{ .user = .{
+            .content = &[_]types.ContentBlock{.{ .text = .{ .text = "hi" } }},
+            .timestamp = 1,
+        } },
+        .{ .assistant = .{
+            .content = &[_]types.ContentBlock{.{ .tool_call = .{
+                .id = "call_1",
+                .name = "bash",
+                .arguments = .null,
+            } }},
+            .api = "openai-responses",
+            .provider = "openai",
+            .model = "gpt-5.4",
+            .usage = types.Usage.init(),
+            .stop_reason = .tool_use,
+            .timestamp = 2,
+        } },
+        .{ .tool_result = .{
+            .tool_call_id = "call_1",
+            .tool_name = "bash",
+            .content = &[_]types.ContentBlock{.{ .text = .{ .text = "ok" } }},
+            .added_tool_names = &added,
+            .timestamp = 3,
+        } },
+    };
+    const tools = [_]types.Tool{
+        .{ .name = "bash", .description = "Run", .parameters = .{ .object = schema } },
+        .{ .name = "read", .description = "Read", .parameters = .{ .object = schema } },
+    };
+    const model = types.Model{
+        .id = "gpt-5.4",
+        .name = "GPT-5.4",
+        .api = "openai-responses",
+        .provider = "openai",
+        .base_url = "https://api.openai.com/v1",
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 400000,
+        .max_tokens = 128000,
+        .compat = compat_value,
+    };
+    const payload = try buildRequestPayload(allocator, model, .{
+        .messages = &messages,
+        .tools = &tools,
+    }, null);
+    defer provider_json.freeValue(allocator, payload);
+
+    const top_tools = payload.object.get("tools").?.array;
+    try std.testing.expectEqual(@as(usize, 1), top_tools.items.len);
+    try std.testing.expectEqualStrings("bash", top_tools.items[0].object.get("name").?.string);
+
+    const input = payload.object.get("input").?.array;
+    var saw_additional = false;
+    for (input.items) |item| {
+        if (item != .object) continue;
+        const item_type = item.object.get("type") orelse continue;
+        if (item_type != .string or !std.mem.eql(u8, item_type.string, "additional_tools")) continue;
+        saw_additional = true;
+        try std.testing.expectEqualStrings("developer", item.object.get("role").?.string);
+        try std.testing.expectEqualStrings("read", item.object.get("tools").?.array.items[0].object.get("name").?.string);
+    }
+    try std.testing.expect(saw_additional);
+}
+
+test "buildRequestPayload merges samplingParams last" {
+    const allocator = std.testing.allocator;
+    var model_params = try initObject(allocator);
+    try model_params.put(allocator, try allocator.dupe(u8, "top_p"), .{ .float = 0.8 });
+    try model_params.put(allocator, try allocator.dupe(u8, "seed"), .{ .integer = 1 });
+    defer provider_json.freeValue(allocator, .{ .object = model_params });
+
+    var request_params = try initObject(allocator);
+    try request_params.put(allocator, try allocator.dupe(u8, "seed"), .{ .integer = 9 });
+    defer provider_json.freeValue(allocator, .{ .object = request_params });
+
+    const model = types.Model{
+        .id = "gpt-5-mini",
+        .name = "GPT-5 Mini",
+        .api = "openai-responses",
+        .provider = "openai",
+        .base_url = "https://api.openai.com/v1",
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 400000,
+        .max_tokens = 128000,
+        .sampling_params = .{ .object = model_params },
+    };
+    const payload = try buildRequestPayload(allocator, model, .{
+        .messages = &[_]types.Message{.{ .user = .{
+            .content = &[_]types.ContentBlock{.{ .text = .{ .text = "Hello" } }},
+            .timestamp = 1,
+        } }},
+    }, .{ .sampling_params = .{ .object = request_params } });
+    defer provider_json.freeValue(allocator, payload);
+
+    try std.testing.expectEqual(@as(f64, 0.8), payload.object.get("top_p").?.float);
+    try std.testing.expectEqual(@as(i64, 9), payload.object.get("seed").?.integer);
 }
 
 test "buildRequestHeaders omits session_id when compat disables it" {

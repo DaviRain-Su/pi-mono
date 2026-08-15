@@ -99,15 +99,52 @@ pub const mistral_mappings = [_]StopReasonMapping{
     .{ .literal = "error", .reason = .error_reason },
 };
 
-// OpenAI Responses / Azure OpenAI / Codex stop-reason mappings
+// OpenAI Responses / Azure OpenAI / Codex stop-reason mappings.
+// `incomplete` is not in this table: TS maps it to `length` only when
+// `incomplete_details.reason == "max_output_tokens"`. Use
+// `mapOpenAIResponsesStatus` at call sites that have the provider reason.
 pub const openai_responses_mappings = [_]StopReasonMapping{
     .{ .literal = "completed", .reason = .stop },
-    .{ .literal = "incomplete", .reason = .length },
     .{ .literal = "failed", .reason = .error_reason },
     .{ .literal = "cancelled", .reason = .error_reason },
     .{ .literal = "queued", .reason = .stop },
     .{ .literal = "in_progress", .reason = .stop },
 };
+
+/// Port of TS `mapStopReason(status, incompleteReason)` in
+/// `packages/ai/src/api/openai-responses-shared.ts`. Caller owns and must
+/// free `error_message` when present.
+pub fn mapOpenAIResponsesStatus(
+    allocator: std.mem.Allocator,
+    status: []const u8,
+    incomplete_reason: ?[]const u8,
+) !StopReasonResult {
+    if (std.mem.eql(u8, status, "completed") or
+        std.mem.eql(u8, status, "queued") or
+        std.mem.eql(u8, status, "in_progress"))
+    {
+        return .{ .stop_reason = .stop };
+    }
+    if (std.mem.eql(u8, status, "failed") or std.mem.eql(u8, status, "cancelled")) {
+        return .{ .stop_reason = .error_reason };
+    }
+    if (std.mem.eql(u8, status, "incomplete")) {
+        if (incomplete_reason) |reason| {
+            if (std.mem.eql(u8, reason, "max_output_tokens")) {
+                return .{ .stop_reason = .length };
+            }
+            return .{
+                .stop_reason = .error_reason,
+                .error_message = try std.fmt.allocPrint(allocator, "Response incomplete: {s}", .{reason}),
+            };
+        }
+        return .{
+            .stop_reason = .error_reason,
+            .error_message = try allocator.dupe(u8, "Response incomplete without a provider reason"),
+        };
+    }
+    return .{ .stop_reason = .error_reason };
+}
 
 // OpenAI Chat / Kimi stop-reason mappings (shared base)
 pub const openai_chat_mappings = [_]StopReasonMapping{
@@ -177,4 +214,26 @@ test "mapStopReasonFromTableWithAllocMessage allocates message for unknown" {
     try std.testing.expectEqual(types.StopReason.error_reason, unknown.stop_reason);
     try std.testing.expect(unknown.error_message != null);
     allocator.free(unknown.error_message.?);
+}
+
+test "mapOpenAIResponsesStatus maps incomplete only for max_output_tokens" {
+    const allocator = std.testing.allocator;
+
+    const completed = try mapOpenAIResponsesStatus(allocator, "completed", null);
+    try std.testing.expectEqual(types.StopReason.stop, completed.stop_reason);
+    try std.testing.expect(completed.error_message == null);
+
+    const truncated = try mapOpenAIResponsesStatus(allocator, "incomplete", "max_output_tokens");
+    try std.testing.expectEqual(types.StopReason.length, truncated.stop_reason);
+    try std.testing.expect(truncated.error_message == null);
+
+    const filtered = try mapOpenAIResponsesStatus(allocator, "incomplete", "content_filter");
+    try std.testing.expectEqual(types.StopReason.error_reason, filtered.stop_reason);
+    try std.testing.expectEqualStrings("Response incomplete: content_filter", filtered.error_message.?);
+    allocator.free(filtered.error_message.?);
+
+    const missing = try mapOpenAIResponsesStatus(allocator, "incomplete", null);
+    try std.testing.expectEqual(types.StopReason.error_reason, missing.stop_reason);
+    try std.testing.expectEqualStrings("Response incomplete without a provider reason", missing.error_message.?);
+    allocator.free(missing.error_message.?);
 }

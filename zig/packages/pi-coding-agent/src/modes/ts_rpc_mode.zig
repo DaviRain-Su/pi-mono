@@ -1732,7 +1732,7 @@ const TsRpcServer = struct {
         };
         const custom_type = custom_type_or_null orelse "extension.message";
         const display = optionalBool(payload, "display") orelse true;
-        const trigger_turn = optionalBool(payload, "triggerTurn") orelse false;
+        const trigger_turn = optionalBool(payload, "triggerTurn");
         const deliver_as = optionalString(payload, "deliverAs") catch {
             try self.sendExtensionUiResponseIfPresent(id, "{\"error\":\"deliverAs must be a string\"}");
             return;
@@ -1746,8 +1746,10 @@ const TsRpcServer = struct {
         _ = try session.session_manager.appendCustomMessageEntry(custom_type, content, display, details);
 
         if (session.isStreaming() or self.hasInFlightPrompt()) {
-            deliverExtensionCustomTextWhileBusy(session, content_text, deliver_as);
-        } else if (trigger_turn) {
+            if (trigger_turn != false) {
+                deliverExtensionCustomTextWhileBusy(session, content_text, deliver_as);
+            }
+        } else if (trigger_turn == true) {
             try self.startExtensionPromptTask(session, content_text);
         }
 

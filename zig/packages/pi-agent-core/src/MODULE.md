@@ -109,10 +109,14 @@ Abort and error exits are terminal for the current run:
   call.
 
 TypeScript has a few loop policies that Zig does not currently expose as direct
-agent-loop controls, including `agentLoopContinue`, dynamic `getApiKey`, and
-tool-result `terminate`. Those are not part of this module's current state
-machine; adding them should be treated as behavior work, not as documentation
-cleanup.
+agent-loop controls, including `agentLoopContinue` and dynamic `getApiKey`.
+Those are not part of this module's current state machine; adding them should
+be treated as behavior work, not as documentation cleanup.
+
+Blocked or executed tool results may set `terminate`. The loop stops after the
+current tool batch only when every finalized result in that batch has
+`terminate = true`. `Agent.reset()` rejects with `error.AgentBusy` while a run
+is active.
 
 ## Major transition details
 

@@ -521,10 +521,18 @@ fn parseSseStreamLines(
 
     finalize.calculateCost(model, &output.usage);
 
-    stream_ptr.push(.{
-        .event_type = .done,
-        .message = output,
-    });
+    if (output.stop_reason == .error_reason or output.stop_reason == .aborted) {
+        stream_ptr.push(.{
+            .event_type = .error_event,
+            .error_message = output.error_message,
+            .message = output,
+        });
+    } else {
+        stream_ptr.push(.{
+            .event_type = .done,
+            .message = output,
+        });
+    }
     stream_ptr.end(output);
 }
 
@@ -918,7 +926,13 @@ fn updateCompletedResponse(
     }
 
     if (extractStringField(response_value, "status")) |status| {
-        output.stop_reason = mapStopReason(status);
+        const incomplete_reason = extractIncompleteReason(response_value);
+        const mapped = try stop_reason_mod.mapOpenAIResponsesStatus(allocator, status, incomplete_reason);
+        output.stop_reason = mapped.stop_reason;
+        if (mapped.error_message) |message| {
+            if (output.error_message) |previous| allocator.free(previous);
+            output.error_message = message;
+        }
     }
 }
 
@@ -968,8 +982,10 @@ fn sanitizeProviderTerminalError(allocator: std.mem.Allocator, message: []const 
     return provider_error.sanitizeProviderErrorDetail(allocator, message);
 }
 
-fn mapStopReason(status: []const u8) types.StopReason {
-    return stop_reason_mod.mapStopReasonFromTable(&stop_reason_mod.openai_responses_mappings, status, .error_reason);
+fn extractIncompleteReason(response_value: std.json.Value) ?[]const u8 {
+    if (response_value != .object) return null;
+    const details = response_value.object.get("incomplete_details") orelse return null;
+    return extractStringField(details, "reason");
 }
 
 const jsonIntegerToU32 = openai_usage.jsonIntegerToU32;

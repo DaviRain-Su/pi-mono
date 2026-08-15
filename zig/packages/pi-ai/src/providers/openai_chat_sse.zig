@@ -20,6 +20,7 @@ const provider_json = @import("../shared/provider_json.zig");
 const openai_usage = @import("../shared/openai_usage.zig");
 const sse_loop = @import("../shared/sse_loop.zig");
 const stop_reason_mod = @import("../shared/stop_reason.zig");
+const chat_payload = @import("openai_chat_payload.zig");
 
 const ActiveTextBlock = struct {
     content_index: usize,
@@ -85,6 +86,7 @@ const SseParseState = struct {
     tool_calls: std.ArrayList(types.ToolCall) = .empty,
     tool_calls_transferred: bool = false,
     has_finish_reason: bool = false,
+    supports_finish_reason: bool = true,
 };
 
 fn initSseParseState(
@@ -96,6 +98,7 @@ fn initSseParseState(
         .allocator = allocator,
         .stream_ptr = stream_ptr,
         .model = model,
+        .supports_finish_reason = chat_payload.getCompat(model).supports_finish_reason,
         .output = .{
             .role = "assistant",
             .content = &[_]types.ContentBlock{},
@@ -230,22 +233,29 @@ fn finishParserState(state: *SseParseState) !void {
         if (state.output.stop_reason == .stop) state.output.stop_reason = .tool_use;
     }
 
-    // Mirror TS fix(ai): openai-completions - throw error on missing
-    // finish-reason (closes #4345). Truncated streams that never emit a
-    // finish_reason must surface as a terminal error, not be reported as a
-    // successful "stop". The error_event preserves any partial content
-    // accumulated so far so callers can still inspect what was streamed.
-    if (!state.has_finish_reason and state.output.stop_reason != .error_reason) {
-        state.output.stop_reason = .error_reason;
-        if (state.output.error_message) |previous| allocator.free(previous);
-        state.output.error_message = try allocator.dupe(u8, "Stream ended without finish_reason");
-        state.stream_ptr.push(.{
-            .event_type = .error_event,
-            .error_message = state.output.error_message,
-            .message = state.output,
-        });
-        state.stream_ptr.end(state.output);
-        return;
+    // Mirror TS: when the provider does not emit finish_reason and
+    // `supportsFinishReason` is false, infer toolUse/stop. Providers that
+    // do support it still treat a missing finish_reason as a terminal error
+    // (closes #4345).
+    if (!state.has_finish_reason) {
+        if (!state.supports_finish_reason) {
+            if (state.output.stop_reason != .error_reason) {
+                const has_tool_call = types.hasInlineToolCalls(state.output) or
+                    (if (state.output.tool_calls) |calls| calls.len > 0 else false);
+                state.output.stop_reason = if (has_tool_call) .tool_use else .stop;
+            }
+        } else if (state.output.stop_reason != .error_reason) {
+            state.output.stop_reason = .error_reason;
+            if (state.output.error_message) |previous| allocator.free(previous);
+            state.output.error_message = try allocator.dupe(u8, "Stream ended without finish_reason");
+            state.stream_ptr.push(.{
+                .event_type = .error_event,
+                .error_message = state.output.error_message,
+                .message = state.output,
+            });
+            state.stream_ptr.end(state.output);
+            return;
+        }
     }
 
     state.stream_ptr.push(.{ .event_type = .done, .message = state.output });
@@ -1145,6 +1155,49 @@ test "openai_chat_sse errors when stream ends after only null finish_reason chun
     try std.testing.expectEqual(types.EventType.error_event, terminal.?.event_type);
     try std.testing.expectEqualStrings("Stream ended without finish_reason", terminal.?.error_message.?);
     try std.testing.expectEqual(types.StopReason.error_reason, terminal.?.message.?.stop_reason);
+}
+
+test "openai_chat_sse infers stop when supportsFinishReason is false" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.failing;
+
+    var compat = try provider_json.initObject(allocator);
+    try compat.put(allocator, try allocator.dupe(u8, "supportsFinishReason"), .{ .bool = false });
+    const compat_value = std.json.Value{ .object = compat };
+    defer provider_json.freeValue(allocator, compat_value);
+
+    const body = try allocator.dupe(
+        u8,
+        "data: {\"id\":\"chatcmpl-compat\",\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n" ++
+            "data: [DONE]\n",
+    );
+    var streaming = http_client.StreamingResponse{
+        .status = 200,
+        .body = body,
+        .buffer = .empty,
+        .allocator = allocator,
+    };
+    defer streaming.deinit();
+
+    var stream = event_stream.createAssistantMessageEventStream(allocator, io);
+    defer stream.deinit();
+
+    var model = testModel("https://api.openai.com/v1");
+    model.compat = compat_value;
+    try parseSseStreamLines(allocator, &stream, &streaming, model, null);
+
+    var terminal: ?@TypeOf(stream.next().?) = null;
+    while (stream.next()) |event| {
+        if (event.event_type == .error_event or event.event_type == .done) {
+            terminal = event;
+            break;
+        }
+        event.deinitTransient(allocator);
+    }
+    try std.testing.expect(terminal != null);
+    try std.testing.expectEqual(types.EventType.done, terminal.?.event_type);
+    try std.testing.expectEqual(types.StopReason.stop, terminal.?.message.?.stop_reason);
+    types.freeAssistantMessage(allocator, terminal.?.message.?);
 }
 
 test "openai_chat_sse accumulates mixed content reasoning and parallel tool deltas independently" {

@@ -49,15 +49,18 @@ pub fn agentEventToJsonValue(allocator: std.mem.Allocator, event: agent.AgentEve
             }
         },
         .message_update => {
-            if (event.message) |message| {
-                try common.putValue(allocator, &object, "message", try messageToJsonValue(allocator, message));
-            }
+            const assistant = switch (event.message orelse return error.InvalidJsonSchema) {
+                .assistant => |message| message,
+                else => return error.InvalidJsonSchema,
+            };
+            try common.putValue(allocator, &object, "usage", try usageToJsonValue(allocator, assistant.usage));
             if (event.assistant_message_event) |assistant_message_event| {
-                const fallback_partial = if (event.message) |message| switch (message) {
-                    .assistant => |assistant| assistant,
-                    else => null,
-                } else null;
-                try common.putValue(allocator, &object, "assistantMessageEvent", try assistantMessageEventToJsonValue(allocator, assistant_message_event, fallback_partial));
+                try common.putValue(
+                    allocator,
+                    &object,
+                    "assistantMessageEvent",
+                    try assistantMessageEventToJsonValue(allocator, assistant_message_event, false),
+                );
             }
         },
         .tool_execution_start => {
@@ -95,7 +98,7 @@ pub fn agentEventToJsonValue(allocator: std.mem.Allocator, event: agent.AgentEve
 pub fn assistantMessageEventToJsonValue(
     allocator: std.mem.Allocator,
     event: ai.AssistantMessageEvent,
-    fallback_partial: ?ai.AssistantMessage,
+    include_partial: bool,
 ) !std.json.Value {
     var object = try common.jsonObject(allocator);
     errdefer common.deinitJsonValue(allocator, .{ .object = object });
@@ -104,28 +107,36 @@ pub fn assistantMessageEventToJsonValue(
 
     switch (event.event_type) {
         .start => {
-            if (assistantPartialForEvent(event, fallback_partial)) |partial| {
-                try common.putValue(allocator, &object, "partial", try assistantMessageToJsonValue(allocator, partial));
+            if (include_partial) {
+                if (assistantPartialForEvent(event, null)) |partial| {
+                    try common.putValue(allocator, &object, "partial", try assistantMessageToJsonValue(allocator, partial));
+                }
             }
         },
         .text_start, .thinking_start, .toolcall_start => {
             if (event.content_index) |content_index| try common.putInt(allocator, &object, "contentIndex", content_index);
-            if (assistantPartialForEvent(event, fallback_partial)) |partial| {
-                try common.putValue(allocator, &object, "partial", try assistantMessageToJsonValue(allocator, partial));
+            if (include_partial) {
+                if (assistantPartialForEvent(event, null)) |partial| {
+                    try common.putValue(allocator, &object, "partial", try assistantMessageToJsonValue(allocator, partial));
+                }
             }
         },
         .text_delta, .thinking_delta, .toolcall_delta => {
             if (event.content_index) |content_index| try common.putInt(allocator, &object, "contentIndex", content_index);
             if (event.delta) |delta| try common.putString(allocator, &object, "delta", delta);
-            if (assistantPartialForEvent(event, fallback_partial)) |partial| {
-                try common.putValue(allocator, &object, "partial", try assistantMessageToJsonValue(allocator, partial));
+            if (include_partial) {
+                if (assistantPartialForEvent(event, null)) |partial| {
+                    try common.putValue(allocator, &object, "partial", try assistantMessageToJsonValue(allocator, partial));
+                }
             }
         },
         .text_end, .thinking_end => {
             if (event.content_index) |content_index| try common.putInt(allocator, &object, "contentIndex", content_index);
             if (event.content) |content| try common.putString(allocator, &object, "content", content);
-            if (assistantPartialForEvent(event, fallback_partial)) |partial| {
-                try common.putValue(allocator, &object, "partial", try assistantMessageToJsonValue(allocator, partial));
+            if (include_partial) {
+                if (assistantPartialForEvent(event, null)) |partial| {
+                    try common.putValue(allocator, &object, "partial", try assistantMessageToJsonValue(allocator, partial));
+                }
             }
         },
         .toolcall_end => {
@@ -133,8 +144,10 @@ pub fn assistantMessageEventToJsonValue(
             if (event.tool_call) |tool_call| {
                 try common.putValue(allocator, &object, "toolCall", try toolCallToJsonValue(allocator, tool_call));
             }
-            if (assistantPartialForEvent(event, fallback_partial)) |partial| {
-                try common.putValue(allocator, &object, "partial", try assistantMessageToJsonValue(allocator, partial));
+            if (include_partial) {
+                if (assistantPartialForEvent(event, null)) |partial| {
+                    try common.putValue(allocator, &object, "partial", try assistantMessageToJsonValue(allocator, partial));
+                }
             }
         },
         .done => {
@@ -182,7 +195,7 @@ fn validateAgentEventValue(allocator: std.mem.Allocator, value: std.json.Value, 
         return;
     }
     if (std.mem.eql(u8, event_type, "message_update")) {
-        try validateMessageField(allocator, object, path, "message");
+        try validateUsageField(allocator, object, path, "usage");
         try validateAssistantEventField(allocator, object, path, "assistantMessageEvent");
         return;
     }
@@ -220,30 +233,30 @@ fn validateAssistantEventValue(allocator: std.mem.Allocator, value: std.json.Val
     const event_type = try requireStringField(allocator, object, path, "type");
 
     if (std.mem.eql(u8, event_type, "start")) {
-        try validateAssistantMessageField(allocator, object, path, "partial");
+        if (object.get("partial") != null) try validateAssistantMessageField(allocator, object, path, "partial");
         return;
     }
     if (std.mem.eql(u8, event_type, "text_start") or std.mem.eql(u8, event_type, "thinking_start") or std.mem.eql(u8, event_type, "toolcall_start")) {
         _ = try requireIntegerField(allocator, object, path, "contentIndex");
-        try validateAssistantMessageField(allocator, object, path, "partial");
+        if (object.get("partial") != null) try validateAssistantMessageField(allocator, object, path, "partial");
         return;
     }
     if (std.mem.eql(u8, event_type, "text_delta") or std.mem.eql(u8, event_type, "thinking_delta") or std.mem.eql(u8, event_type, "toolcall_delta")) {
         _ = try requireIntegerField(allocator, object, path, "contentIndex");
         _ = try requireStringField(allocator, object, path, "delta");
-        try validateAssistantMessageField(allocator, object, path, "partial");
+        if (object.get("partial") != null) try validateAssistantMessageField(allocator, object, path, "partial");
         return;
     }
     if (std.mem.eql(u8, event_type, "text_end") or std.mem.eql(u8, event_type, "thinking_end")) {
         _ = try requireIntegerField(allocator, object, path, "contentIndex");
         _ = try requireStringField(allocator, object, path, "content");
-        try validateAssistantMessageField(allocator, object, path, "partial");
+        if (object.get("partial") != null) try validateAssistantMessageField(allocator, object, path, "partial");
         return;
     }
     if (std.mem.eql(u8, event_type, "toolcall_end")) {
         _ = try requireIntegerField(allocator, object, path, "contentIndex");
         try validateToolCallField(allocator, object, path, "toolCall");
-        try validateAssistantMessageField(allocator, object, path, "partial");
+        if (object.get("partial") != null) try validateAssistantMessageField(allocator, object, path, "partial");
         return;
     }
     if (std.mem.eql(u8, event_type, "done")) {
@@ -1404,7 +1417,7 @@ test "partial toolcall message update serializes malformed argument fallback as 
         .timestamp = 10,
     };
 
-    const line = try stringifyAgentEventLine(allocator, .{
+    const update_line = try stringifyAgentEventLine(allocator, .{
         .event_type = .message_update,
         .message = .{ .assistant = assistant_message },
         .assistant_message_event = .{
@@ -1413,6 +1426,17 @@ test "partial toolcall message update serializes malformed argument fallback as 
             .delta = "not-json",
             .message = assistant_message,
         },
+    });
+    defer allocator.free(update_line);
+    var update_parsed = try std.json.parseFromSlice(std.json.Value, allocator, update_line, .{});
+    defer update_parsed.deinit();
+    try validateAgentEventJson(allocator, update_parsed.value);
+    try std.testing.expect(update_parsed.value.object.get("message") == null);
+    try std.testing.expect(update_parsed.value.object.get("usage") != null);
+
+    const line = try stringifyAgentEventLine(allocator, .{
+        .event_type = .message_end,
+        .message = .{ .assistant = assistant_message },
     });
     defer allocator.free(line);
 
@@ -1526,7 +1550,7 @@ test "VAL-REFACTOR-009 deterministic JSON event wire fuzz smoke" {
     }
 
     const unknown_field_json =
-        \\{"type":"message_update","unknownTopLevel":true,"message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"api":"faux","provider":"faux","model":"faux-1","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":10},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"hello","partial":{"role":"assistant","content":[{"type":"text","text":"hello"}],"api":"faux","provider":"faux","model":"faux-1","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":10},"unknownNested":"ignored"}}
+        \\{"type":"message_update","unknownTopLevel":true,"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"hello","unknownNested":"ignored"}}
     ;
     try expectJsonWireFuzzValid(allocator, "unknown-fields", unknown_field_json);
 
@@ -1543,7 +1567,7 @@ test "VAL-REFACTOR-009 deterministic JSON event wire fuzz smoke" {
         .{
             .label = "malformed-assistant-content-index",
             .json =
-            \\{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"api":"faux","provider":"faux","model":"faux-1","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":10},"assistantMessageEvent":{"type":"text_delta","contentIndex":"zero","delta":"hello","partial":{"role":"assistant","content":[{"type":"text","text":"hello"}],"api":"faux","provider":"faux","model":"faux-1","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":10}}}
+            \\{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":"zero","delta":"hello"}}
             ,
         },
         .{

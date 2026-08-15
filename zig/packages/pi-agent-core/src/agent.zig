@@ -133,6 +133,8 @@ pub const AgentOptions = struct {
     extension_hook_context: ?*anyopaque = null,
     before_tool_call: ?types.BeforeToolCallFn = null,
     after_tool_call: ?types.AfterToolCallFn = null,
+    should_stop_after_turn: ?types.ShouldStopAfterTurnFn = null,
+    should_stop_after_turn_context: ?*anyopaque = null,
     prepare_next_turn: ?types.PrepareNextTurnFn = null,
     prepare_next_turn_context: ?*anyopaque = null,
 };
@@ -180,6 +182,8 @@ pub const Agent = struct {
     extension_hook_context: ?*anyopaque,
     before_tool_call: ?types.BeforeToolCallFn,
     after_tool_call: ?types.AfterToolCallFn,
+    should_stop_after_turn: ?types.ShouldStopAfterTurnFn,
+    should_stop_after_turn_context: ?*anyopaque,
     prepare_next_turn: ?types.PrepareNextTurnFn,
     prepare_next_turn_context: ?*anyopaque,
     listeners: std.ArrayList(types.AgentSubscriber),
@@ -215,6 +219,8 @@ pub const Agent = struct {
             .extension_hook_context = options.extension_hook_context,
             .before_tool_call = options.before_tool_call,
             .after_tool_call = options.after_tool_call,
+            .should_stop_after_turn = options.should_stop_after_turn,
+            .should_stop_after_turn_context = options.should_stop_after_turn_context,
             .prepare_next_turn = options.prepare_next_turn,
             .prepare_next_turn_context = options.prepare_next_turn_context,
             .listeners = .empty,
@@ -437,9 +443,9 @@ pub const Agent = struct {
         return self.follow_up_queue.len();
     }
 
-    pub fn reset(self: *Agent) void {
+    pub fn reset(self: *Agent) error{AgentBusy}!void {
+        if (self.is_streaming) return error.AgentBusy;
         self.clearOwnedMessages();
-        self.is_streaming = false;
         self.streaming_message = null;
         self.clearPendingToolCalls();
         self.setErrorMessage(null);
@@ -568,6 +574,8 @@ pub const Agent = struct {
             .tool_execution = self.tool_execution,
             .before_tool_call = self.before_tool_call,
             .after_tool_call = self.after_tool_call,
+            .should_stop_after_turn = self.should_stop_after_turn,
+            .should_stop_after_turn_context = self.should_stop_after_turn_context,
             .convert_to_llm = self.convert_to_llm,
             .convert_to_llm_context = self.convert_to_llm_context,
             .transform_context = self.transform_context,
@@ -1013,14 +1021,13 @@ test "agent reset clears transcript runtime state and queues without removing to
     const tool = makeTool("tool-a", "Tool A");
     try agent.setTools(&[_]types.AgentTool{tool});
     try agent.setMessages(&[_]types.AgentMessage{try userTextMessage(arena.allocator(), "hello", 1)});
-    agent.beginRun();
     agent.setStreamingMessage(try userTextMessage(arena.allocator(), "streaming", 2));
     try agent.addPendingToolCall("tool-call-1");
     agent.setErrorMessage("boom");
     try agent.steer(try userTextMessage(arena.allocator(), "steer", 3));
     try agent.followUp(try userTextMessage(arena.allocator(), "follow", 4));
 
-    agent.reset();
+    try agent.reset();
 
     const state = agent.state();
     try std.testing.expectEqual(@as(usize, 1), state.tools.len);
@@ -1032,6 +1039,25 @@ test "agent reset clears transcript runtime state and queues without removing to
     try std.testing.expectEqual(@as(usize, 0), agent.steeringQueueLen());
     try std.testing.expectEqual(@as(usize, 0), agent.followUpQueueLen());
     try std.testing.expect(!agent.hasQueuedMessages());
+}
+
+test "agent reset rejects while a run is active" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var agent = try Agent.init(std.testing.allocator, .{});
+    defer agent.deinit();
+
+    try agent.setMessages(&[_]types.AgentMessage{try userTextMessage(arena.allocator(), "hello", 1)});
+    agent.beginRun();
+    try std.testing.expectError(error.AgentBusy, agent.reset());
+    try std.testing.expectEqual(@as(usize, 1), agent.getMessages().len);
+    try std.testing.expect(agent.state().is_streaming);
+
+    agent.finishRun();
+    try agent.reset();
+    try std.testing.expectEqual(@as(usize, 0), agent.getMessages().len);
+    try std.testing.expect(!agent.state().is_streaming);
 }
 
 test "agent streaming lifecycle toggles flags and clears runtime state on finish" {

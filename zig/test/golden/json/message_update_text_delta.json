@@ -2,63 +2,21 @@
   "assistantMessageEvent": {
     "contentIndex": 0,
     "delta": "partial",
-    "partial": {
-      "api": "faux",
-      "content": [
-        {
-          "text": "partial text",
-          "type": "text"
-        }
-      ],
-      "model": "faux-1",
-      "provider": "faux",
-      "role": "assistant",
-      "stopReason": "stop",
-      "timestamp": 2001,
-      "usage": {
-        "cacheRead": 0,
-        "cacheWrite": 0,
-        "cost": {
-          "cacheRead": 0,
-          "cacheWrite": 0,
-          "input": 0,
-          "output": 0,
-          "total": 0
-        },
-        "input": 3,
-        "output": 5,
-        "totalTokens": 8
-      }
-    },
     "type": "text_delta"
   },
-  "message": {
-    "api": "faux",
-    "content": [
-      {
-        "text": "partial text",
-        "type": "text"
-      }
-    ],
-    "model": "faux-1",
-    "provider": "faux",
-    "role": "assistant",
-    "stopReason": "stop",
-    "timestamp": 2001,
-    "usage": {
+  "type": "message_update",
+  "usage": {
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "cost": {
       "cacheRead": 0,
       "cacheWrite": 0,
-      "cost": {
-        "cacheRead": 0,
-        "cacheWrite": 0,
-        "input": 0,
-        "output": 0,
-        "total": 0
-      },
-      "input": 3,
-      "output": 5,
-      "totalTokens": 8
-    }
-  },
-  "type": "message_update"
+      "input": 0,
+      "output": 0,
+      "total": 0
+    },
+    "input": 3,
+    "output": 5,
+    "totalTokens": 8
+  }
 }

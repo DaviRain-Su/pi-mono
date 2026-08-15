@@ -1109,6 +1109,7 @@ fn beforeToolCallHook(
         return .{
             .block = true,
             .reason = try allocator.dupe(u8, stringField(result, "reason") orelse stringField(result, "message") orelse "blocked by extension hook"),
+            .terminate = boolField(result, "terminate") orelse false,
         };
     }
     return null;
@@ -1146,7 +1147,10 @@ fn afterToolCallHook(
     if (boolField(result, "isError") orelse boolField(result, "is_error")) |is_error| {
         patch.is_error = is_error;
     }
-    if (patch.content == null and patch.details == null and patch.is_error == null) return null;
+    if (boolField(result, "terminate")) |terminate| {
+        patch.terminate = terminate;
+    }
+    if (patch.content == null and patch.details == null and patch.is_error == null and patch.terminate == null) return null;
     return patch;
 }
 

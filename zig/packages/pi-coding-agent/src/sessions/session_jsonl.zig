@@ -363,6 +363,7 @@ pub fn cloneMessage(allocator: std.mem.Allocator, message: agent.AgentMessage) !
             .tool_name = try allocator.dupe(u8, tool_result.tool_name),
             .content = try cloneContentBlocks(allocator, tool_result.content),
             .details = if (tool_result.details) |details| try common.cloneJsonValue(allocator, details) else null,
+            .added_tool_names = try ai.cloneAddedToolNames(allocator, tool_result.added_tool_names),
             .is_error = tool_result.is_error,
             .timestamp = tool_result.timestamp,
         } },
@@ -392,6 +393,7 @@ pub fn deinitMessage(allocator: std.mem.Allocator, message: *agent.AgentMessage)
             allocator.free(tool_result.tool_name);
             common.deinitContentBlocks(allocator, tool_result.content);
             if (tool_result.details) |details| common.deinitJsonValue(allocator, details);
+            ai.freeAddedToolNames(allocator, tool_result.added_tool_names);
         },
     }
 }
@@ -493,6 +495,7 @@ fn cloneToolCalls(allocator: std.mem.Allocator, tool_calls: []const ai.ToolCall)
             .name = try allocator.dupe(u8, tool_call.name),
             .arguments = try common.cloneJsonValue(allocator, tool_call.arguments),
             .thought_signature = if (tool_call.thought_signature) |signature| try allocator.dupe(u8, signature) else null,
+            .namespace = if (tool_call.namespace) |namespace| try allocator.dupe(u8, namespace) else null,
         };
     }
 
@@ -512,6 +515,7 @@ fn cloneToolCall(allocator: std.mem.Allocator, tool_call: ai.ToolCall) !ai.ToolC
         .name = try allocator.dupe(u8, tool_call.name),
         .arguments = try common.cloneJsonValue(allocator, tool_call.arguments),
         .thought_signature = if (tool_call.thought_signature) |signature| try allocator.dupe(u8, signature) else null,
+        .namespace = if (tool_call.namespace) |namespace| try allocator.dupe(u8, namespace) else null,
     };
 }
 
@@ -519,6 +523,7 @@ fn deinitToolCall(allocator: std.mem.Allocator, tool_call: ai.ToolCall) void {
     allocator.free(tool_call.id);
     allocator.free(tool_call.name);
     if (tool_call.thought_signature) |signature| allocator.free(signature);
+    if (tool_call.namespace) |namespace| allocator.free(namespace);
     common.deinitJsonValue(allocator, tool_call.arguments);
 }
 
@@ -725,6 +730,17 @@ fn messageToJsonValue(allocator: std.mem.Allocator, message: agent.AgentMessage)
             if (tool_result.details) |details| {
                 try common.putValue(allocator, &object, "details", try common.cloneJsonValue(allocator, details));
             }
+            if (tool_result.added_tool_names) |names| {
+                var names_array = std.json.Array.init(allocator);
+                errdefer {
+                    for (names_array.items) |item| common.deinitJsonValue(allocator, item);
+                    names_array.deinit();
+                }
+                for (names) |name| {
+                    try names_array.append(.{ .string = try allocator.dupe(u8, name) });
+                }
+                try common.putValue(allocator, &object, "addedToolNames", .{ .array = names_array });
+            }
             try common.putBool(allocator, &object, "isError", tool_result.is_error);
             try common.putInt(allocator, &object, "timestamp", tool_result.timestamp);
             break :blk .{ .object = object };
@@ -800,6 +816,9 @@ fn toolCallToJsonValue(allocator: std.mem.Allocator, tool_call: ai.ToolCall) !st
     try common.putValue(allocator, &object, "arguments", try common.cloneJsonValue(allocator, tool_call.arguments));
     if (tool_call.thought_signature) |signature| {
         try common.putString(allocator, &object, "thoughtSignature", signature);
+    }
+    if (tool_call.namespace) |namespace| {
+        try common.putString(allocator, &object, "namespace", namespace);
     }
     return .{ .object = object };
 }
@@ -1067,6 +1086,7 @@ fn parseMessageValue(allocator: std.mem.Allocator, value: std.json.Value) !agent
             .tool_name = try allocator.dupe(u8, try getRequiredString(object, "toolName")),
             .content = try parseGenericContentValue(allocator, object.get("content") orelse return error.InvalidSessionMessage),
             .details = if (object.get("details")) |details| try common.cloneJsonValue(allocator, details) else null,
+            .added_tool_names = try parseAddedToolNames(allocator, object.get("addedToolNames")),
             .is_error = getOptionalBool(object, "isError") orelse false,
             .timestamp = try getRequiredI64(object, "timestamp"),
         } };
@@ -1123,6 +1143,7 @@ fn parseAssistantContentValue(
                 .name = try allocator.dupe(u8, try getRequiredString(object, "name")),
                 .arguments = try common.cloneJsonValue(allocator, object.get("arguments") orelse .null),
                 .thought_signature = if (getOptionalString(object, "thoughtSignature")) |signature| try allocator.dupe(u8, signature) else null,
+                .namespace = if (getOptionalString(object, "namespace")) |namespace| try allocator.dupe(u8, namespace) else null,
             };
             try content.append(allocator, .{ .tool_call = try cloneToolCall(allocator, tool_call) });
             try tool_calls.append(allocator, tool_call);
@@ -1177,6 +1198,24 @@ fn parseContentBlockObject(allocator: std.mem.Allocator, object: std.json.Object
     }
 
     return error.UnsupportedContentType;
+}
+
+fn parseAddedToolNames(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]const []const u8 {
+    const raw = value orelse return null;
+    const array = try requireArray(raw);
+    if (array.items.len == 0) return null;
+    const names = try allocator.alloc([]const u8, array.items.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (names[0..initialized]) |name| allocator.free(name);
+        allocator.free(names);
+    }
+    for (array.items, 0..) |item, index| {
+        if (item != .string) return error.InvalidSessionMessage;
+        names[index] = try allocator.dupe(u8, item.string);
+        initialized += 1;
+    }
+    return names;
 }
 
 fn parseUsageValue(value: std.json.Value) !ai.Usage {

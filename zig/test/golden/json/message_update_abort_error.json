@@ -32,34 +32,19 @@
     "reason": "aborted",
     "type": "error"
   },
-  "message": {
-    "api": "faux",
-    "content": [
-      {
-        "text": "partial text",
-        "type": "text"
-      }
-    ],
-    "errorMessage": "aborted",
-    "model": "faux-1",
-    "provider": "faux",
-    "role": "assistant",
-    "stopReason": "aborted",
-    "timestamp": 2003,
-    "usage": {
+  "type": "message_update",
+  "usage": {
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "cost": {
       "cacheRead": 0,
       "cacheWrite": 0,
-      "cost": {
-        "cacheRead": 0,
-        "cacheWrite": 0,
-        "input": 0,
-        "output": 0,
-        "total": 0
-      },
-      "input": 3,
-      "output": 1,
-      "totalTokens": 4
-    }
-  },
-  "type": "message_update"
+      "input": 0,
+      "output": 0,
+      "total": 0
+    },
+    "input": 3,
+    "output": 1,
+    "totalTokens": 4
+  }
 }

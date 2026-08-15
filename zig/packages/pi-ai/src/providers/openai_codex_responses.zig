@@ -20,6 +20,7 @@ const putObjectValue = provider_json_put.putObjectValue;
 const responses_api = @import("../shared/responses_api.zig");
 const sse_loop = @import("../shared/sse_loop.zig");
 const stop_reason_mod = @import("../shared/stop_reason.zig");
+const sampling_params = @import("../shared/sampling_params.zig");
 const openai_usage = @import("../shared/openai_usage.zig");
 const openai = @import("openai.zig");
 const openai_responses = @import("openai_responses.zig");
@@ -831,9 +832,7 @@ pub fn buildPayloadJsonBytes(
 ) ![]u8 {
     var owned = try buildOwnedCodex(allocator, model, context, options);
     defer owned.deinit();
-    return try std.json.Stringify.valueAlloc(allocator, owned.payload, .{
-        .emit_null_optional_fields = false,
-    });
+    return try sampling_params.stringifyWithSamplingParams(allocator, owned.payload, model, options);
 }
 
 pub fn buildRequestPayload(
@@ -1016,10 +1015,25 @@ fn parseSseStreamLinesWithDiagnostic(
     const effective_service_tier = resolveCodexServiceTier(response_service_tier, request_service_tier);
     applyServiceTierPricing(&output.usage, effective_service_tier, model);
 
-    stream_ptr.push(.{
-        .event_type = .done,
-        .message = output,
-    });
+    emitCodexCompletion(stream_ptr, output);
+}
+
+fn emitCodexCompletion(
+    stream_ptr: *event_stream.AssistantMessageEventStream,
+    output: types.AssistantMessage,
+) void {
+    if (output.stop_reason == .error_reason or output.stop_reason == .aborted) {
+        stream_ptr.push(.{
+            .event_type = .error_event,
+            .error_message = output.error_message,
+            .message = output,
+        });
+    } else {
+        stream_ptr.push(.{
+            .event_type = .done,
+            .message = output,
+        });
+    }
     stream_ptr.end(output);
 }
 
@@ -1501,11 +1515,7 @@ fn processCodexWebSocketStream(
         }
     }
 
-    stream_ptr.push(.{
-        .event_type = .done,
-        .message = output,
-    });
-    stream_ptr.end(output);
+    emitCodexCompletion(stream_ptr, output);
     return WebSocketAttempt.done;
 }
 
@@ -2051,7 +2061,13 @@ fn updateCompletedResponse(
     }
 
     if (extractStringField(response_value, "status")) |status| {
-        output.stop_reason = mapStopReason(status);
+        const incomplete_reason = extractIncompleteReason(response_value);
+        const mapped = try stop_reason_mod.mapOpenAIResponsesStatus(allocator, status, incomplete_reason);
+        output.stop_reason = mapped.stop_reason;
+        if (mapped.error_message) |message| {
+            if (output.error_message) |previous| allocator.free(previous);
+            output.error_message = message;
+        }
     }
 }
 
@@ -2145,8 +2161,10 @@ fn extractTopLevelErrorMessage(allocator: std.mem.Allocator, value: std.json.Val
     return try allocator.dupe(u8, "Unknown error");
 }
 
-fn mapStopReason(status: []const u8) types.StopReason {
-    return stop_reason_mod.mapStopReasonFromTable(&stop_reason_mod.openai_responses_mappings, status, .error_reason);
+fn extractIncompleteReason(response_value: std.json.Value) ?[]const u8 {
+    if (response_value != .object) return null;
+    const details = response_value.object.get("incomplete_details") orelse return null;
+    return extractStringField(details, "reason");
 }
 
 const jsonIntegerToU32 = openai_usage.jsonIntegerToU32;
@@ -2629,7 +2647,7 @@ test "parseSseStreamLines uses final output item text when delta stream is incom
     freeAssistantMessageOwned(allocator, done.message.?);
 }
 
-test "parseSseStreamLines maps incomplete Codex responses to length" {
+test "parseSseStreamLines maps incomplete Codex responses without a reason to error" {
     const allocator = std.testing.allocator;
     const io = std.Io.failing;
     const body = try allocator.dupe(
@@ -2672,7 +2690,59 @@ test "parseSseStreamLines maps incomplete Codex responses to length" {
     defer freeEventOwned(allocator, delta);
     _ = stream_instance.next();
 
+    const terminal = stream_instance.next().?;
+    try std.testing.expectEqual(types.EventType.error_event, terminal.event_type);
+    try std.testing.expect(terminal.message != null);
+    try std.testing.expectEqual(types.StopReason.error_reason, terminal.message.?.stop_reason);
+    try std.testing.expectEqualStrings("Response incomplete without a provider reason", terminal.message.?.error_message.?);
+    freeAssistantMessageOwned(allocator, terminal.message.?);
+}
+
+test "parseSseStreamLines maps incomplete Codex responses with max_output_tokens to length" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.failing;
+    const body = try allocator.dupe(
+        u8,
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n" ++
+            "data: {\"type\":\"response.content_part.added\",\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n" ++
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Partial\"}\n" ++
+            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"Partial\"}]}}\n" ++
+            "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"total_tokens\":3}}}\n",
+    );
+
+    var streaming = http_client.StreamingResponse{
+        .status = 200,
+        .body = body,
+        .buffer = .empty,
+        .allocator = allocator,
+    };
+    defer streaming.deinit();
+
+    var stream_instance = event_stream.createAssistantMessageEventStream(allocator, io);
+    defer stream_instance.deinit();
+
+    const model = types.Model{
+        .id = "gpt-5.1-codex",
+        .name = "GPT-5.1 Codex",
+        .api = "openai-codex-responses",
+        .provider = "openai-codex",
+        .base_url = "https://chatgpt.com/backend-api",
+        .reasoning = true,
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 400000,
+        .max_tokens = 128000,
+    };
+
+    try parseSseStreamLines(allocator, &stream_instance, &streaming, model, null);
+    _ = stream_instance.next();
+    _ = stream_instance.next();
+
+    const delta = stream_instance.next().?;
+    defer freeEventOwned(allocator, delta);
+    _ = stream_instance.next();
+
     const done = stream_instance.next().?;
+    try std.testing.expectEqual(types.EventType.done, done.event_type);
     try std.testing.expect(done.message != null);
     try std.testing.expectEqual(types.StopReason.length, done.message.?.stop_reason);
     freeAssistantMessageOwned(allocator, done.message.?);

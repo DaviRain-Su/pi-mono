@@ -348,12 +348,14 @@ pub const ToolCallEventResult = struct {
     input: ?[]const u8 = null,
     block: bool = false,
     reason: ?[]const u8 = null,
+    terminate: bool = false,
 };
 
 pub const ToolCallCombinedResult = struct {
     input: []const u8,
     block: bool = false,
     reason: ?[]const u8 = null,
+    terminate: bool = false,
 };
 
 pub const UserBashEventResult = struct {
@@ -1192,6 +1194,7 @@ pub const ResultEventBus = struct {
                             .input = current_input,
                             .block = true,
                             .reason = result.reason,
+                            .terminate = result.terminate,
                         };
                     }
                 },

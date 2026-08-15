@@ -49,18 +49,25 @@ pub const ToolExecutionMode = enum {
 pub const BeforeToolCallResult = struct {
     block: bool = false,
     reason: ?[]const u8 = null,
+    /// Hint that the agent should stop after the current tool batch when this
+    /// call is blocked. Early termination only happens when every finalized
+    /// tool result in the batch sets this to true.
+    terminate: bool = false,
 };
 
 pub const AfterToolCallResult = struct {
     content: ?[]const pi_types.ContentBlock = null,
     details: ?std.json.Value = null,
     is_error: ?bool = null,
+    /// Replaces the early-termination hint when provided.
+    terminate: ?bool = null,
 };
 
 pub const AgentToolResult = struct {
     content: []const pi_types.ContentBlock,
     details: ?std.json.Value = null,
     is_error: bool = false,
+    terminate: bool = false,
 };
 
 pub const AgentToolSource = enum {

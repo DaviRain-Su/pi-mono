@@ -206,6 +206,49 @@ test "command_context: sendCustomMessage respects deliverAs followUp when stream
     try std.testing.expectEqual(@as(usize, 1), session.agent.followUpQueueLen());
 }
 
+test "command_context: sendCustomMessage triggerTurn false records without steering" {
+    const allocator = std.testing.allocator;
+    var session = try session_mod.AgentSession.create(allocator, std.testing.io, .{
+        .cwd = "/tmp/cmd-ctx-custom-no-steer",
+        .system_prompt = "test",
+    });
+    defer session.deinit();
+
+    var stdout_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stdout_capture.deinit();
+    var stderr_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr_capture.deinit();
+    var server = TsRpcServer.init(allocator, std.testing.io, &session, &stdout_capture.writer, &stderr_capture.writer);
+    try server.start();
+    defer server.finish() catch {};
+
+    session.agent.is_streaming = true;
+
+    const payload = "{\"customType\":\"ext.note\",\"content\":\"record only\",\"display\":false,\"triggerTurn\":false,\"deliverAs\":\"followUp\"}";
+    var req = extension_runtime.ExtensionUiRequest{
+        .id = try allocator.dupe(u8, "scm-no-steer"),
+        .method = try allocator.dupe(u8, "send_custom_message"),
+        .response_required = false,
+        .payload_json = try allocator.dupe(u8, payload),
+    };
+    defer req.deinit(allocator);
+
+    try server.writeExtensionUIRequestFromHost(req);
+
+    var found = false;
+    for (session.session_manager.getEntries()) |entry| {
+        switch (entry) {
+            .custom_message => |cm| {
+                if (std.mem.eql(u8, cm.custom_type, "ext.note")) found = true;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found);
+    try std.testing.expectEqual(@as(usize, 0), session.agent.followUpQueueLen());
+    try std.testing.expectEqual(@as(usize, 0), session.agent.steeringQueueLen());
+}
+
 test "command_context: sendUserMessage queues followUp when agent is streaming" {
     const allocator = std.testing.allocator;
     var session = try session_mod.AgentSession.create(allocator, std.testing.io, .{

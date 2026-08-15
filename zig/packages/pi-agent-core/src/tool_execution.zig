@@ -31,6 +31,11 @@ pub const FinalizedToolCallOutcome = struct {
     is_error: bool,
 };
 
+pub const ExecutedToolCallBatch = struct {
+    messages: []const types.ToolResultMessage,
+    terminate: bool = false,
+};
+
 /// Partial tool-call UX policy:
 /// - Every toolcall_start/toolcall_delta/toolcall_end still emits a
 ///   message_update so RPC/streaming clients can observe argument
@@ -117,7 +122,7 @@ pub fn executeToolCalls(
     emit_context: ?*anyopaque,
     emit: types.AgentEventCallback,
     signal: ?*const std.atomic.Value(bool),
-) ![]const types.ToolResultMessage {
+) !ExecutedToolCallBatch {
     var has_sequential_tool = false;
     for (tool_calls) |tool_call| {
         if (findTool(current_context.tools, tool_call.name)) |tool| {
@@ -165,9 +170,11 @@ pub fn executeToolCallsSequential(
     emit_context: ?*anyopaque,
     emit: types.AgentEventCallback,
     signal: ?*const std.atomic.Value(bool),
-) ![]const types.ToolResultMessage {
+) !ExecutedToolCallBatch {
     var results = std.ArrayList(types.ToolResultMessage).empty;
     errdefer results.deinit(allocator);
+    var terminate_flags = try std.ArrayList(bool).initCapacity(allocator, tool_calls.len);
+    defer terminate_flags.deinit(allocator);
 
     for (tool_calls) |tool_call| {
         try emit(emit_context, .{
@@ -186,6 +193,7 @@ pub fn executeToolCallsSequential(
             signal,
         );
 
+        var terminate = false;
         const tool_result = switch (prepared) {
             .prepared => |prepared_tool| blk: {
                 var owned_prepared_tool = prepared_tool;
@@ -209,6 +217,7 @@ pub fn executeToolCallsSequential(
                     emit,
                     signal,
                 );
+                terminate = finalized.result.terminate;
                 break :blk try emitToolResultMessageForToolCall(
                     owned_prepared_tool.tool_call,
                     finalized.result,
@@ -217,20 +226,27 @@ pub fn executeToolCallsSequential(
                     emit,
                 );
             },
-            .immediate => |immediate| try emitToolCallOutcome(
-                allocator,
-                tool_call,
-                immediate.result,
-                immediate.is_error,
-                emit_context,
-                emit,
-            ),
+            .immediate => |immediate| blk: {
+                terminate = immediate.result.terminate;
+                break :blk try emitToolCallOutcome(
+                    allocator,
+                    tool_call,
+                    immediate.result,
+                    immediate.is_error,
+                    emit_context,
+                    emit,
+                );
+            },
         };
 
         try results.append(allocator, tool_result);
+        try terminate_flags.append(allocator, terminate);
     }
 
-    return try results.toOwnedSlice(allocator);
+    return .{
+        .messages = try results.toOwnedSlice(allocator),
+        .terminate = shouldTerminateToolBatch(terminate_flags.items),
+    };
 }
 
 pub fn executeToolCallsParallel(
@@ -243,10 +259,13 @@ pub fn executeToolCallsParallel(
     emit_context: ?*anyopaque,
     emit: types.AgentEventCallback,
     signal: ?*const std.atomic.Value(bool),
-) ![]const types.ToolResultMessage {
+) !ExecutedToolCallBatch {
     const result_slots = try allocator.alloc(?types.ToolResultMessage, tool_calls.len);
     @memset(result_slots, null);
     defer allocator.free(result_slots);
+    const terminate_flags = try allocator.alloc(bool, tool_calls.len);
+    @memset(terminate_flags, false);
+    defer allocator.free(terminate_flags);
 
     var prepared_calls = std.ArrayList(PreparedToolCallEntry).empty;
     defer {
@@ -280,11 +299,14 @@ pub fn executeToolCallsParallel(
                 .prepared = prepared_tool,
                 .source_index = source_index,
             }),
-            .immediate => |immediate| try immediate_calls.append(allocator, .{
-                .tool_call = tool_call,
-                .outcome = immediate,
-                .source_index = source_index,
-            }),
+            .immediate => |immediate| {
+                terminate_flags[source_index] = immediate.result.terminate;
+                try immediate_calls.append(allocator, .{
+                    .tool_call = tool_call,
+                    .outcome = immediate,
+                    .source_index = source_index,
+                });
+            },
         }
     }
 
@@ -297,7 +319,10 @@ pub fn executeToolCallsParallel(
 
     if (prepared_calls.items.len == 0) {
         try emitParallelToolResultMessagesInSourceOrder(result_slots, emit_context, emit);
-        return try collectParallelToolResultsInSourceOrder(allocator, result_slots);
+        return .{
+            .messages = try collectParallelToolResultsInSourceOrder(allocator, result_slots),
+            .terminate = shouldTerminateToolBatch(terminate_flags),
+        };
     }
 
     const task_count = prepared_calls.items.len;
@@ -362,10 +387,14 @@ pub fn executeToolCallsParallel(
             finalized.result,
             finalized.is_error,
         );
+        terminate_flags[task.source_index] = finalized.result.terminate;
     }
 
     try emitParallelToolResultMessagesInSourceOrder(result_slots, emit_context, emit);
-    return try collectParallelToolResultsInSourceOrder(allocator, result_slots);
+    return .{
+        .messages = try collectParallelToolResultsInSourceOrder(allocator, result_slots),
+        .terminate = shouldTerminateToolBatch(terminate_flags),
+    };
 }
 
 pub fn prepareToolCall(
@@ -429,11 +458,13 @@ pub fn prepareToolCall(
         if (before_result) |result| {
             if (result.block) {
                 provider_json.freeValue(allocator, args);
+                var blocked = try createErrorToolResult(
+                    allocator,
+                    result.reason orelse "Tool execution was blocked",
+                );
+                blocked.terminate = result.terminate;
                 return .{ .immediate = .{
-                    .result = try createErrorToolResult(
-                        allocator,
-                        result.reason orelse "Tool execution was blocked",
-                    ),
+                    .result = blocked,
                     .is_error = true,
                 } };
             }
@@ -621,6 +652,7 @@ pub fn finalizeExecutedToolCall(
             }
             if (override.details) |details| result.details = details;
             if (override.is_error) |next_is_error| is_error = next_is_error;
+            if (override.terminate) |terminate| result.terminate = terminate;
         }
     }
 
@@ -633,6 +665,14 @@ pub fn finalizeExecutedToolCall(
         emit,
     );
     return .{ .result = result, .is_error = is_error };
+}
+
+fn shouldTerminateToolBatch(flags: []const bool) bool {
+    if (flags.len == 0) return false;
+    for (flags) |flag| {
+        if (!flag) return false;
+    }
+    return true;
 }
 
 fn createErrorToolResult(allocator: std.mem.Allocator, message: []const u8) !types.AgentToolResult {
@@ -1146,7 +1186,7 @@ test "executeToolCallsParallel preserves result order when tools complete out of
     var capture = TestEventCapture.init(std.testing.allocator);
     defer capture.deinit();
 
-    const results = try executeToolCallsParallel(
+    const results = (try executeToolCallsParallel(
         std.testing.allocator,
         std.testing.io,
         .{
@@ -1160,7 +1200,7 @@ test "executeToolCallsParallel preserves result order when tools complete out of
         &capture,
         testCaptureEvent,
         null,
-    );
+    )).messages;
     defer testDeinitToolResults(std.testing.allocator, results);
 
     try std.testing.expect(fixture.first_waited_for_second.load(.seq_cst));
@@ -1215,7 +1255,7 @@ test "executeToolCallsParallel represents tool error results without crashing" {
     var capture = TestEventCapture.init(std.testing.allocator);
     defer capture.deinit();
 
-    const results = try executeToolCallsParallel(
+    const results = (try executeToolCallsParallel(
         std.testing.allocator,
         std.testing.io,
         .{
@@ -1229,7 +1269,7 @@ test "executeToolCallsParallel represents tool error results without crashing" {
         &capture,
         testCaptureEvent,
         null,
-    );
+    )).messages;
     defer testDeinitToolResults(std.testing.allocator, results);
 
     try std.testing.expectEqual(@as(usize, 1), results.len);
@@ -1273,7 +1313,7 @@ test "executeToolCallsParallel forwards pre-set abort signal and terminates grac
     };
     var signal = std.atomic.Value(bool).init(true);
 
-    const results = try executeToolCallsParallel(
+    const results = (try executeToolCallsParallel(
         std.testing.allocator,
         std.testing.io,
         .{
@@ -1287,7 +1327,7 @@ test "executeToolCallsParallel forwards pre-set abort signal and terminates grac
         null,
         testIgnoreEvent,
         &signal,
-    );
+    )).messages;
     defer testDeinitToolResults(std.testing.allocator, results);
 
     try std.testing.expectEqual(@as(usize, 1), fixture.execute_count.load(.seq_cst));
@@ -1356,4 +1396,101 @@ test "finalizeExecutedToolCall emits finalized tool execution event shape" {
     try std.testing.expectEqual(false, event.is_error.?);
     try std.testing.expectEqual(false, event.result.?.is_error);
     try std.testing.expectEqualStrings("final output", event.result.?.content[0].text.text);
+}
+
+fn testBlockAndTerminate(
+    _: std.mem.Allocator,
+    _: types.BeforeToolCallContext,
+    _: ?*const std.atomic.Value(bool),
+) !?types.BeforeToolCallResult {
+    return .{
+        .block = true,
+        .reason = "blocked by test",
+        .terminate = true,
+    };
+}
+
+fn testBlockWithoutTerminate(
+    _: std.mem.Allocator,
+    _: types.BeforeToolCallContext,
+    _: ?*const std.atomic.Value(bool),
+) !?types.BeforeToolCallResult {
+    return .{
+        .block = true,
+        .reason = "blocked by test",
+    };
+}
+
+test "blocked tool calls with terminate stop the batch" {
+    const tool_calls = [_]pi_types.ToolCall{
+        .{ .id = "tool-1", .name = "echo", .arguments = .null },
+        .{ .id = "tool-2", .name = "echo", .arguments = .null },
+    };
+    const tool = types.AgentTool{
+        .name = "echo",
+        .description = "Echo",
+        .label = "Echo",
+        .parameters = .null,
+        .execute = testEchoToolExecute,
+    };
+    var config = testConfig();
+    config.before_tool_call = testBlockAndTerminate;
+
+    const batch = try executeToolCalls(
+        std.testing.allocator,
+        std.testing.io,
+        .{
+            .system_prompt = "",
+            .messages = &.{},
+            .tools = &[_]types.AgentTool{tool},
+        },
+        testAssistantMessage(),
+        tool_calls[0..],
+        config,
+        null,
+        testIgnoreEvent,
+        null,
+    );
+    defer testDeinitToolResults(std.testing.allocator, batch.messages);
+
+    try std.testing.expect(batch.terminate);
+    try std.testing.expectEqual(@as(usize, 2), batch.messages.len);
+    try std.testing.expect(batch.messages[0].is_error);
+    try std.testing.expectEqualStrings("blocked by test", batch.messages[0].content[0].text.text);
+}
+
+test "blocked tool calls without terminate keep the batch running" {
+    const tool_calls = [_]pi_types.ToolCall{
+        .{ .id = "tool-1", .name = "echo", .arguments = .null },
+    };
+    const tool = types.AgentTool{
+        .name = "echo",
+        .description = "Echo",
+        .label = "Echo",
+        .parameters = .null,
+        .execute = testEchoToolExecute,
+    };
+    var config = testConfig();
+    config.before_tool_call = testBlockWithoutTerminate;
+
+    const batch = try executeToolCalls(
+        std.testing.allocator,
+        std.testing.io,
+        .{
+            .system_prompt = "",
+            .messages = &.{},
+            .tools = &[_]types.AgentTool{tool},
+        },
+        testAssistantMessage(),
+        tool_calls[0..],
+        config,
+        null,
+        testIgnoreEvent,
+        null,
+    );
+    defer testDeinitToolResults(std.testing.allocator, batch.messages);
+
+    try std.testing.expect(!batch.terminate);
+    try std.testing.expectEqual(@as(usize, 1), batch.messages.len);
+    try std.testing.expect(batch.messages[0].is_error);
 }

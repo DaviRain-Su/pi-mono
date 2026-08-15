@@ -12,6 +12,7 @@ pub fn cloneToolResult(
         .content = try cloneContentBlocks(allocator, result.content),
         .details = if (result.details) |details| try provider_json.cloneValue(allocator, details) else null,
         .is_error = result.is_error,
+        .terminate = result.terminate,
     };
 }
 
@@ -129,11 +130,15 @@ pub fn cloneToolCall(allocator: std.mem.Allocator, tool_call: pi_types.ToolCall)
     const thought_signature = if (tool_call.thought_signature) |signature| try allocator.dupe(u8, signature) else null;
     errdefer if (thought_signature) |signature| allocator.free(signature);
 
+    const namespace = if (tool_call.namespace) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (namespace) |value| allocator.free(value);
+
     return .{
         .id = id,
         .name = name,
         .arguments = arguments,
         .thought_signature = thought_signature,
+        .namespace = namespace,
     };
 }
 
@@ -142,6 +147,7 @@ pub fn deinitToolCall(allocator: std.mem.Allocator, tool_call: pi_types.ToolCall
     allocator.free(tool_call.id);
     allocator.free(tool_call.name);
     if (tool_call.thought_signature) |signature| allocator.free(signature);
+    if (tool_call.namespace) |namespace| allocator.free(namespace);
     provider_json.freeValue(allocator, tool_call.arguments);
 }
 
