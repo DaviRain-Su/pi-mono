@@ -29,6 +29,10 @@ pub const SettingId = enum {
     install_telemetry,
     double_escape_action,
     tree_filter_mode,
+    tui_mode,
+    fullscreen_exit_output,
+    fullscreen_scrollbar,
+    default_project_trust,
     warnings,
     thinking,
     theme,
@@ -230,6 +234,10 @@ fn appendMainRows(
     try appendSettingRow(allocator, overlay, choices, items, .install_telemetry, "Install telemetry", "Send an anonymous version/update ping after changelog-detected updates", boolValue(if (runtime) |config| config.enableInstallTelemetry() else true));
     try appendSettingRow(allocator, overlay, choices, items, .double_escape_action, "Double-escape action", "Action when pressing Escape twice with empty editor", doubleEscapeName(if (runtime) |config| config.doubleEscapeAction() else .tree));
     try appendSettingRow(allocator, overlay, choices, items, .tree_filter_mode, "Tree filter mode", "Default filter when opening /tree", treeFilterName(if (runtime) |config| config.treeFilterMode() else .default));
+    try appendSettingRow(allocator, overlay, choices, items, .tui_mode, "TUI mode", "Interface layout; fullscreen mode is experimental", tuiModeName(if (runtime) |config| config.tuiMode() else .regular));
+    try appendSettingRow(allocator, overlay, choices, items, .fullscreen_exit_output, "Fullscreen exit output", "Print the transcript or only a session resume hint when exiting fullscreen mode", fullscreenExitOutputName(if (runtime) |config| config.fullscreenExitOutput() else .transcript));
+    try appendSettingRow(allocator, overlay, choices, items, .fullscreen_scrollbar, "Fullscreen scrollbar", "Scrollbar behavior in fullscreen mode; has no effect in regular mode", fullscreenScrollbarName(if (runtime) |config| config.fullscreenScrollbar() else .auto));
+    try appendSettingRow(allocator, overlay, choices, items, .default_project_trust, "Default project trust", "How to treat project-local files when no saved /trust decision exists", defaultProjectTrustName(if (runtime) |config| config.defaultProjectTrust() else .ask));
     try appendSettingRow(allocator, overlay, choices, items, .warnings, "Warnings", "Enable or disable individual warnings", "configure");
     try appendSettingRow(allocator, overlay, choices, items, .thinking, "Thinking level", "Reasoning depth for thinking-capable models", thinkingName(overlay.session.agent.getThinkingLevel()));
     const current_theme = if (runtime) |config| config.settings.theme orelse overlay.original_theme else overlay.original_theme;
@@ -414,6 +422,26 @@ pub fn treeFilterName(mode: config_mod.TreeFilterMode) []const u8 {
     };
 }
 
+pub fn tuiModeName(mode: config_mod.TuiMode) []const u8 {
+    return mode.jsonName();
+}
+
+pub fn fullscreenExitOutputName(value: config_mod.FullscreenExitOutput) []const u8 {
+    return value.jsonName();
+}
+
+pub fn fullscreenScrollbarName(value: config_mod.FullscreenScrollbar) []const u8 {
+    return value.jsonName();
+}
+
+pub fn defaultProjectTrustName(value: config_mod.DefaultProjectTrust) []const u8 {
+    return switch (value) {
+        .ask => "ask",
+        .always => "always",
+        .never => "never",
+    };
+}
+
 fn freeChoices(allocator: std.mem.Allocator, choices: []Choice) void {
     for (choices) |choice| allocator.free(choice.value);
     allocator.free(choices);
@@ -445,14 +473,17 @@ test "settings overlay lists structured searchable rows and capability dependent
     var saw_theme = false;
     var saw_images = false;
     var saw_raw = false;
+    var saw_tui_mode = false;
     for (overlay.items) |item| {
         if (std.mem.indexOf(u8, item.label, "Theme") != null) saw_theme = true;
         if (std.mem.indexOf(u8, item.label, "Show images") != null) saw_images = true;
         if (std.mem.indexOf(u8, item.label, "Advanced raw JSON") != null) saw_raw = true;
+        if (std.mem.indexOf(u8, item.label, "TUI mode") != null) saw_tui_mode = true;
     }
     try std.testing.expect(saw_theme);
     try std.testing.expect(saw_images);
     try std.testing.expect(saw_raw);
+    try std.testing.expect(saw_tui_mode);
 
     try updateSearch(allocator, &overlay, "theme");
     try std.testing.expectEqual(@as(usize, 1), overlay.items.len);

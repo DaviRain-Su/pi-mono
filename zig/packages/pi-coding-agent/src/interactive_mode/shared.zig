@@ -86,6 +86,8 @@ pub const RunInteractiveModeOptions = struct {
     skills: []const resources_mod.Skill = &.{},
     keybindings: ?*const keybindings_mod.Keybindings = null,
     theme: ?*const resources_mod.Theme = null,
+    /// CLI `--tui-mode` override for this invocation. Settings win when null.
+    tui_mode: ?config_mod.TuiMode = null,
     terminal_name: []const u8 = "term",
     runtime_config: ?*const config_mod.RuntimeConfig = null,
     offline: bool = false,
@@ -100,6 +102,13 @@ pub const RunInteractiveModeOptions = struct {
     /// own missing-cwd selector to avoid prompting twice.
     missing_cwd_already_confirmed: bool = false,
 };
+
+/// CLI `--tui-mode` wins for this run; otherwise the persisted setting.
+pub fn resolveTuiMode(options: RunInteractiveModeOptions) config_mod.TuiMode {
+    if (options.tui_mode) |mode| return mode;
+    if (options.runtime_config) |config| return config.tuiMode();
+    return .regular;
+}
 
 pub const LiveResources = struct {
     pub const ReloadExtensionToolsSink = struct {
@@ -334,4 +343,20 @@ pub fn overrideApiKeyForProvider(options: RunInteractiveModeOptions, provider_na
         if (std.mem.eql(u8, provider_name, options.provider)) return api_key;
     }
     return null;
+}
+
+test "resolveTuiMode prefers the CLI override over persisted settings" {
+    try std.testing.expectEqual(config_mod.TuiMode.regular, resolveTuiMode(.{
+        .cwd = "/tmp",
+        .system_prompt = "",
+        .session_dir = "/tmp",
+        .provider = "openai",
+    }));
+    try std.testing.expectEqual(config_mod.TuiMode.fullscreen, resolveTuiMode(.{
+        .cwd = "/tmp",
+        .system_prompt = "",
+        .session_dir = "/tmp",
+        .provider = "openai",
+        .tui_mode = .fullscreen,
+    }));
 }

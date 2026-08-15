@@ -1287,6 +1287,10 @@ fn nextSettingsValue(allocator: std.mem.Allocator, id: overlays.SettingId, curre
         .transport => nextFromList(allocator, &.{ "sse", "websocket", "websocket-cached", "auto" }, current),
         .double_escape_action => nextFromList(allocator, &.{ "tree", "fork", "none" }, current),
         .tree_filter_mode => nextFromList(allocator, &.{ "default", "no-tools", "user-only", "labeled-only", "all" }, current),
+        .tui_mode => nextFromList(allocator, &.{ "regular", "fullscreen" }, current),
+        .fullscreen_exit_output => nextFromList(allocator, &.{ "transcript", "resume-hint" }, current),
+        .fullscreen_scrollbar => nextFromList(allocator, &.{ "auto", "always", "hidden" }, current),
+        .default_project_trust => nextFromList(allocator, &.{ "ask", "always", "never" }, current),
         else => allocator.dupe(u8, current),
     };
 }
@@ -1380,6 +1384,10 @@ fn updateSettingsJsonValue(
         .install_telemetry => try putBool(allocator, object, "enableInstallTelemetry", parseBoolText(value)),
         .double_escape_action => try putString(allocator, object, "doubleEscapeAction", value),
         .tree_filter_mode => try putString(allocator, object, "treeFilterMode", value),
+        .tui_mode => try putString(allocator, object, "tuiMode", value),
+        .fullscreen_exit_output => try putString(allocator, object, "fullscreenExitOutput", value),
+        .fullscreen_scrollbar => try putString(allocator, object, "fullscreenScrollbar", value),
+        .default_project_trust => try putString(allocator, object, "defaultProjectTrust", value),
         .theme => try putString(allocator, object, "theme", value),
         .warnings => try putNestedBool(allocator, object, "warnings", "anthropicExtraUsage", parseBoolText(value)),
         else => {},

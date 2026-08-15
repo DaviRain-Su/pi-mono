@@ -241,6 +241,42 @@ test "runtime config reads defaultProjectTrust from global settings only" {
     try std.testing.expectEqual(config.DefaultProjectTrust.always, runtime.defaultProjectTrust());
 }
 
+test "runtime config reads tuiMode and fullscreen settings" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "home/.pi/agent");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "home/.pi/agent/settings.json",
+        .data =
+        \\{
+        \\  "tuiMode": "fullscreen",
+        \\  "fullscreenExitOutput": "resume-hint",
+        \\  "fullscreenScrollbar": "hidden"
+        \\}
+        ,
+    });
+
+    const home_dir = try makeTmpPath(allocator, tmp, "home");
+    defer allocator.free(home_dir);
+    const project_dir = try makeTmpPath(allocator, tmp, "home");
+    defer allocator.free(project_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_dir);
+
+    var runtime = try loadRuntimeConfig(allocator, std.testing.io, &env_map, project_dir);
+    defer runtime.deinit();
+    defer ai.model_registry.resetForTesting();
+
+    try std.testing.expectEqual(config.TuiMode.fullscreen, runtime.tuiMode());
+    try std.testing.expectEqual(config.FullscreenExitOutput.resume_hint, runtime.fullscreenExitOutput());
+    try std.testing.expectEqual(config.FullscreenScrollbar.hidden, runtime.fullscreenScrollbar());
+}
+
 test "runtime config skips project settings when the project is untrusted" {
     const allocator = std.testing.allocator;
 

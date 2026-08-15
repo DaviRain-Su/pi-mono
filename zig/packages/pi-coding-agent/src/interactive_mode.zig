@@ -46,6 +46,7 @@ pub const configuredRetrySettings = shared.configuredRetrySettings;
 pub const settingsResources = shared.settingsResources;
 pub const normalizePathArgument = shared.normalizePathArgument;
 pub const overrideApiKeyForProvider = shared.overrideApiKeyForProvider;
+pub const resolveTuiMode = shared.resolveTuiMode;
 pub const ASSISTANT_PREFIX = formatting.ASSISTANT_PREFIX;
 pub const formatPrefixedBlocks = formatting.formatPrefixedBlocks;
 pub const formatAssistantMessage = formatting.formatAssistantMessage;

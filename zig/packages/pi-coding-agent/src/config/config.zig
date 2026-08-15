@@ -44,6 +44,63 @@ pub const TreeFilterMode = enum {
     all,
 };
 
+pub const TuiMode = enum {
+    regular,
+    fullscreen,
+
+    pub fn parse(value: []const u8) ?TuiMode {
+        if (std.mem.eql(u8, value, "regular")) return .regular;
+        if (std.mem.eql(u8, value, "fullscreen")) return .fullscreen;
+        return null;
+    }
+
+    pub fn jsonName(self: TuiMode) []const u8 {
+        return switch (self) {
+            .regular => "regular",
+            .fullscreen => "fullscreen",
+        };
+    }
+};
+
+pub const FullscreenExitOutput = enum {
+    transcript,
+    resume_hint,
+
+    pub fn parse(value: []const u8) ?FullscreenExitOutput {
+        if (std.mem.eql(u8, value, "transcript")) return .transcript;
+        if (std.mem.eql(u8, value, "resume-hint")) return .resume_hint;
+        return null;
+    }
+
+    pub fn jsonName(self: FullscreenExitOutput) []const u8 {
+        return switch (self) {
+            .transcript => "transcript",
+            .resume_hint => "resume-hint",
+        };
+    }
+};
+
+pub const FullscreenScrollbar = enum {
+    auto,
+    always,
+    hidden,
+
+    pub fn parse(value: []const u8) ?FullscreenScrollbar {
+        if (std.mem.eql(u8, value, "auto")) return .auto;
+        if (std.mem.eql(u8, value, "always")) return .always;
+        if (std.mem.eql(u8, value, "hidden")) return .hidden;
+        return null;
+    }
+
+    pub fn jsonName(self: FullscreenScrollbar) []const u8 {
+        return switch (self) {
+            .auto => "auto",
+            .always => "always",
+            .hidden => "hidden",
+        };
+    }
+};
+
 const MAX_SAFE_INTEGER: u64 = 9007199254740991;
 
 pub const ExtensionResourceLimits = struct {
@@ -131,6 +188,9 @@ pub const Settings = struct {
     image_block_images: ?bool = null,
     double_escape_action: ?DoubleEscapeAction = null,
     tree_filter_mode: ?TreeFilterMode = null,
+    tui_mode: ?TuiMode = null,
+    fullscreen_exit_output: ?FullscreenExitOutput = null,
+    fullscreen_scrollbar: ?FullscreenScrollbar = null,
     warning_anthropic_extra_usage: ?bool = null,
     branch_summary_skip_prompt: ?bool = null,
     compaction: ?session_mod.CompactionSettings = null,
@@ -187,6 +247,9 @@ pub const Settings = struct {
             .image_block_images = self.image_block_images,
             .double_escape_action = self.double_escape_action,
             .tree_filter_mode = self.tree_filter_mode,
+            .tui_mode = self.tui_mode,
+            .fullscreen_exit_output = self.fullscreen_exit_output,
+            .fullscreen_scrollbar = self.fullscreen_scrollbar,
             .warning_anthropic_extra_usage = self.warning_anthropic_extra_usage,
             .branch_summary_skip_prompt = self.branch_summary_skip_prompt,
             .compaction = self.compaction,
@@ -295,6 +358,19 @@ pub const RuntimeConfig = struct {
 
     pub fn treeFilterMode(self: *const RuntimeConfig) TreeFilterMode {
         return self.settings.tree_filter_mode orelse .default;
+    }
+
+    /// Mirrors TS `settingsManager.getTuiMode()`: only `fullscreen` is sticky.
+    pub fn tuiMode(self: *const RuntimeConfig) TuiMode {
+        return self.settings.tui_mode orelse .regular;
+    }
+
+    pub fn fullscreenExitOutput(self: *const RuntimeConfig) FullscreenExitOutput {
+        return self.settings.fullscreen_exit_output orelse .transcript;
+    }
+
+    pub fn fullscreenScrollbar(self: *const RuntimeConfig) FullscreenScrollbar {
+        return self.settings.fullscreen_scrollbar orelse .auto;
     }
 
     /// Mirrors TS `settingsManager.getDefaultTools()`: project replaces
@@ -514,6 +590,9 @@ const SettingFieldKind = enum {
     double_escape_action,
     tree_filter_mode,
     default_project_trust,
+    tui_mode,
+    fullscreen_exit_output,
+    fullscreen_scrollbar,
     string_list,
 };
 
@@ -550,6 +629,9 @@ const TOP_LEVEL_SETTINGS: []const SettingFieldSpec = &.{
     .{ .json_key = "autocompleteMaxVisible", .field = "autocomplete_max_visible", .kind = .positive_usize },
     .{ .json_key = "doubleEscapeAction", .field = "double_escape_action", .kind = .double_escape_action },
     .{ .json_key = "treeFilterMode", .field = "tree_filter_mode", .kind = .tree_filter_mode },
+    .{ .json_key = "tuiMode", .field = "tui_mode", .kind = .tui_mode },
+    .{ .json_key = "fullscreenExitOutput", .field = "fullscreen_exit_output", .kind = .fullscreen_exit_output },
+    .{ .json_key = "fullscreenScrollbar", .field = "fullscreen_scrollbar", .kind = .fullscreen_scrollbar },
     .{ .json_key = "extensions", .field = "extensions", .kind = .string_list },
     .{ .json_key = "skills", .field = "skills", .kind = .string_list },
     .{ .json_key = "prompts", .field = "prompts", .kind = .string_list },
@@ -637,6 +719,15 @@ fn applySettingFromJson(
         },
         .default_project_trust => {
             if (value == .string) @field(settings, spec.field) = DefaultProjectTrust.parse(value.string);
+        },
+        .tui_mode => {
+            if (value == .string) @field(settings, spec.field) = TuiMode.parse(value.string);
+        },
+        .fullscreen_exit_output => {
+            if (value == .string) @field(settings, spec.field) = FullscreenExitOutput.parse(value.string);
+        },
+        .fullscreen_scrollbar => {
+            if (value == .string) @field(settings, spec.field) = FullscreenScrollbar.parse(value.string);
         },
         .string_list => {
             @field(settings, spec.field) = try parseStringList(allocator, value);

@@ -127,6 +127,10 @@ pub fn dispatchRunMode(
             .skills = prepared.resource_bundle.skills,
             .keybindings = &prepared.runtime_config.keybindings,
             .theme = prepared.resource_bundle.selectedTheme(),
+            .tui_mode = if (options.tui_mode) |mode| switch (mode) {
+                .regular => .regular,
+                .fullscreen => .fullscreen,
+            } else null,
             .terminal_name = prepared.resource_bundle.terminal_name,
             .runtime_config = &prepared.runtime_config,
             .offline = options.offline,
