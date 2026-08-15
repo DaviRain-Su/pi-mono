@@ -47,9 +47,12 @@ fn firstModelIndex(provider: []const u8) ?usize {
 
 test "image model registry exposes generated OpenRouter models" {
     try std.testing.expect(image_models_generated.provider_count > 0);
-    try std.testing.expect(image_models_generated.model_count > 0);
+    try std.testing.expectEqual(@as(usize, 45), image_models_generated.model_count);
     const model = getImageModel("openrouter", "openrouter/auto").?;
     try std.testing.expectEqualStrings("openrouter-images", model.api);
     try std.testing.expectEqualStrings("openrouter", model.provider);
-    try std.testing.expect(getImageModels("openrouter").len > 0);
+    try std.testing.expectEqual(@as(usize, 45), getImageModels("openrouter").len);
+    try std.testing.expect(getImageModel("openrouter", "openai/gpt-image-2") != null);
+    try std.testing.expect(getImageModel("openrouter", "bytedance-seed/seedream-5-0-pro") != null);
+    try std.testing.expect(getImageModel("openrouter", "sourceful/riverflow-v2-fast-preview") == null);
 }
