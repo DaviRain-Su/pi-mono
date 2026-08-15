@@ -16,10 +16,16 @@ pub const ThinkingLevel = enum {
     xhigh,
 };
 
+pub const TuiMode = enum {
+    regular,
+    fullscreen,
+};
+
 pub const ParseError = error{
     MissingOptionValue,
     InvalidMode,
     InvalidThinkingLevel,
+    InvalidTuiMode,
     UnknownOption,
 };
 
@@ -59,6 +65,8 @@ pub const Args = struct {
     @"continue": bool = false,
     @"resume": bool = false,
     session: ?[]const u8 = null,
+    session_id: ?[]const u8 = null,
+    name: ?[]const u8 = null,
     fork: ?[]const u8 = null,
     session_dir: ?[]const u8 = null,
     models: ?[]const []const u8 = null,
@@ -69,6 +77,9 @@ pub const Args = struct {
 
     mode: Mode = .text,
     tools: ?[]const []const u8 = null,
+    exclude_tools: ?[]const []const u8 = null,
+    use_theme: ?[]const u8 = null,
+    tui_mode: ?TuiMode = null,
     no_tools: bool = false,
     no_builtin_tools: bool = false,
     no_context_files: bool = false,
@@ -90,6 +101,7 @@ pub const Args = struct {
         if (self.prompt_templates) |prompt_templates| allocator.free(prompt_templates);
         if (self.themes) |themes| allocator.free(themes);
         if (self.tools) |tools| allocator.free(tools);
+        if (self.exclude_tools) |exclude_tools| allocator.free(exclude_tools);
         if (self.models) |models| allocator.free(models);
         if (self.messages) |messages| allocator.free(messages);
         if (self.file_args) |file_args| allocator.free(file_args);
@@ -183,6 +195,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) ParseAr
             i += 1;
             if (i >= argv.len) return error.MissingOptionValue;
             result.session = argv[i];
+        } else if (std.mem.eql(u8, arg, "--session-id")) {
+            i += 1;
+            if (i >= argv.len) return error.MissingOptionValue;
+            result.session_id = argv[i];
+        } else if (std.mem.eql(u8, arg, "--name") or std.mem.eql(u8, arg, "-n")) {
+            i += 1;
+            if (i >= argv.len) return error.MissingOptionValue;
+            result.name = argv[i];
         } else if (std.mem.eql(u8, arg, "--fork")) {
             i += 1;
             if (i >= argv.len) return error.MissingOptionValue;
@@ -225,6 +245,22 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) ParseAr
                 result.tools = null;
             }
             result.tools = try parseToolList(allocator, argv[i]);
+        } else if (std.mem.eql(u8, arg, "--exclude-tools") or std.mem.eql(u8, arg, "-xt")) {
+            i += 1;
+            if (i >= argv.len) return error.MissingOptionValue;
+            if (result.exclude_tools) |exclude_tools| {
+                allocator.free(exclude_tools);
+                result.exclude_tools = null;
+            }
+            result.exclude_tools = try parseToolList(allocator, argv[i]);
+        } else if (std.mem.eql(u8, arg, "--use-theme")) {
+            i += 1;
+            if (i >= argv.len) return error.MissingOptionValue;
+            result.use_theme = argv[i];
+        } else if (std.mem.eql(u8, arg, "--tui-mode")) {
+            i += 1;
+            if (i >= argv.len) return error.MissingOptionValue;
+            result.tui_mode = parseTuiMode(argv[i]) orelse return error.InvalidTuiMode;
         } else if (std.mem.eql(u8, arg, "--no-tools") or std.mem.eql(u8, arg, "-nt")) {
             result.no_tools = true;
         } else if (std.mem.eql(u8, arg, "--no-builtin-tools") or std.mem.eql(u8, arg, "-nbt")) {
@@ -460,6 +496,8 @@ fn renderBaseHelp(allocator: std.mem.Allocator, version: []const u8) ![]u8 {
         \\  --continue, -c                 Continue a previous session
         \\  --resume, -r                   Resume the latest session
         \\  --session <id|path>            Use a specific session identifier or path
+        \\  --session-id <id>              Use exact project session ID, creating it if missing
+        \\  --name, -n <name>              Set the session display name
         \\  --fork <id|path>               Fork a specific session into a new session
         \\  --session-dir <dir>            Directory for session storage and lookup
         \\  --no-session                   Run without session persistence
@@ -468,11 +506,14 @@ fn renderBaseHelp(allocator: std.mem.Allocator, version: []const u8) ![]u8 {
         \\  --print, -p                    Non-interactive mode
         \\  --mode, -mode <mode>           Output mode: text, json, rpc, json-rpc (default: text; ts-rpc aliases rpc)
         \\  --tools, -t <names>            Comma-separated tool allowlist
+        \\  --exclude-tools, -xt <names>   Comma-separated denylist of tool names to disable
+        \\  --use-theme <name>             Set the initial interactive theme for this run
+        \\  --tui-mode <mode>              TUI mode: regular (default) or fullscreen
         \\  --no-tools, -nt                Disable built-in tools by default
         \\  --no-builtin-tools, -nbt       Disable built-in tools by default but keep custom tools enabled
         \\  --system-prompt <text>         Replace the default system prompt
         \\  --append-system-prompt <text>  Append text to the system prompt (repeatable)
-        \\  --no-context-files, -nc        Disable AGENTS.md and CLAUDE.md discovery and loading
+        \\  --no-context-files, -nc        Disable AGENTS.md, AGENTS.override.md, and CLAUDE.md discovery and loading
         \\  --export <file>                Export session file to HTML or JSONL and exit
         \\  --verbose                      Force verbose startup
         \\  --offline                      Disable startup network operations
@@ -508,6 +549,12 @@ fn parseMode(value: []const u8) ?Mode {
     if (std.mem.eql(u8, value, "rpc")) return .ts_rpc;
     if (std.mem.eql(u8, value, "ts-rpc")) return .ts_rpc;
     if (std.mem.eql(u8, value, "json-rpc")) return .rpc;
+    return null;
+}
+
+fn parseTuiMode(value: []const u8) ?TuiMode {
+    if (std.mem.eql(u8, value, "regular")) return .regular;
+    if (std.mem.eql(u8, value, "fullscreen")) return .fullscreen;
     return null;
 }
 
@@ -637,6 +684,31 @@ test "parse args supports expected CLI flags" {
     try std.testing.expectEqualStrings("read", args.tools.?[0]);
     try std.testing.expectEqualStrings("grep", args.tools.?[1]);
     try std.testing.expectEqualStrings("ls", args.tools.?[2]);
+}
+
+test "parse args accepts session id, name, exclude-tools, theme, and tui-mode" {
+    const allocator = std.testing.allocator;
+    var args = try parseArgs(allocator, &.{
+        "--session-id",
+        "sess-exact",
+        "-n",
+        "Night Shift",
+        "-xt",
+        "ask_question,grep",
+        "--use-theme",
+        "codex",
+        "--tui-mode",
+        "fullscreen",
+    });
+    defer args.deinit(allocator);
+
+    try std.testing.expectEqualStrings("sess-exact", args.session_id.?);
+    try std.testing.expectEqualStrings("Night Shift", args.name.?);
+    try std.testing.expectEqual(@as(usize, 2), args.exclude_tools.?.len);
+    try std.testing.expectEqualStrings("ask_question", args.exclude_tools.?[0]);
+    try std.testing.expectEqualStrings("grep", args.exclude_tools.?[1]);
+    try std.testing.expectEqualStrings("codex", args.use_theme.?);
+    try std.testing.expectEqual(TuiMode.fullscreen, args.tui_mode.?);
 }
 
 test "parse args accepts TS RPC mode" {
@@ -903,6 +975,8 @@ test "help text mentions expected flags" {
     try std.testing.expect(std.mem.indexOf(u8, help, "--continue, -c") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--resume, -r") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--session <id|path>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--session-id <id>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--name, -n <name>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--fork <id|path>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--session-dir <dir>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--no-session") != null);
@@ -914,6 +988,9 @@ test "help text mentions expected flags" {
     try std.testing.expect(std.mem.indexOf(u8, help, "--append-system-prompt <text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "repeatable") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--tools, -t <names>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--exclude-tools, -xt <names>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--use-theme <name>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--tui-mode <mode>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--no-tools, -nt") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--no-builtin-tools, -nbt") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--no-context-files, -nc") != null);

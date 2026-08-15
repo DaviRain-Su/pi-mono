@@ -35,6 +35,7 @@ pub fn createSeededSession(
     retry_settings: session_mod.RetrySettings,
     session_dir: ?[]const u8,
     messages: []const agent.AgentMessage,
+    session_id: ?[]const u8,
 ) !session_mod.AgentSession {
     var session = try session_mod.AgentSession.create(allocator, io, .{
         .cwd = cwd,
@@ -43,6 +44,7 @@ pub fn createSeededSession(
         .api_key = api_key,
         .thinking_level = thinking_level,
         .session_dir = session_dir,
+        .session_id = session_id,
         .tools = tool_items,
         .compaction = compaction_settings,
         .retry = retry_settings,
@@ -137,6 +139,7 @@ pub fn handleNewSlashCommand(
         configuredRetrySettings(options.runtime_config),
         if (session.session_manager.getSessionDir().len > 0) session_dir else null,
         &.{},
+        options.session_id,
     );
     errdefer candidate.deinit();
 
@@ -469,6 +472,30 @@ pub fn resolveSessionPath(
     }
 
     return error.FileNotFound;
+}
+
+pub fn findSessionFileByExactId(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    session_dir: []const u8,
+    session_id: []const u8,
+) !?[]u8 {
+    var dir = std.Io.Dir.openDirAbsolute(io, session_dir, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer dir.close(io);
+
+    const suffix = try std.fmt.allocPrint(allocator, "_{s}.jsonl", .{session_id});
+    defer allocator.free(suffix);
+
+    var iterator = dir.iterate();
+    while (try iterator.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, suffix)) continue;
+        return try std.fs.path.join(allocator, &[_][]const u8{ session_dir, entry.name });
+    }
+    return null;
 }
 
 fn presentProviderSelectionError(

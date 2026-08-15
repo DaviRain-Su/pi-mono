@@ -43,6 +43,9 @@ pub fn resolveResumeSessionPath(
     if (options.session) |session_ref| {
         return try resolveSessionPath(allocator, io, options.session_dir, options.cwd, session_ref);
     }
+    if (options.session_id) |session_id| {
+        return session_lifecycle.findSessionFileByExactId(allocator, io, options.session_dir, session_id);
+    }
     if (options.@"continue" or options.@"resume") {
         if (try session_manager_mod.findMostRecentSession(allocator, io, options.session_dir)) |recent| {
             // findMostRecentSession returns an allocator-owned slice; the
@@ -235,16 +238,17 @@ pub fn openInitialSessionWithMissingCwd(
     const compaction_settings = configuredCompactionSettings(options.runtime_config);
     const retry_settings = configuredRetrySettings(options.runtime_config);
     if (options.no_session) {
-        return try session_mod.AgentSession.create(allocator, io, .{
+        return finishOpenedSession(try session_mod.AgentSession.create(allocator, io, .{
             .cwd = options.cwd,
             .system_prompt = options.system_prompt,
             .model = model,
             .api_key = api_key,
             .thinking_level = thinking_level,
             .tools = tool_items,
+            .session_id = options.session_id,
             .compaction = compaction_settings,
             .retry = retry_settings,
-        });
+        }), options.session_name);
     }
 
     if (options.fork) |session_ref| {
@@ -263,7 +267,7 @@ pub fn openInitialSessionWithMissingCwd(
         );
         defer source_session.deinit();
 
-        return try createSeededSession(
+        return finishOpenedSession(try createSeededSession(
             allocator,
             io,
             options.cwd,
@@ -276,13 +280,14 @@ pub fn openInitialSessionWithMissingCwd(
             retry_settings,
             session_dir,
             source_session.agent.getMessages(),
-        );
+            options.session_id,
+        ), options.session_name);
     }
 
     if (options.session) |session_ref| {
         const session_path = try resolveSessionPath(allocator, io, session_dir, options.cwd, session_ref);
         defer allocator.free(session_path);
-        return try openSessionAtPathCapturing(
+        return finishOpenedSession(try openSessionAtPathCapturing(
             allocator,
             io,
             session_path,
@@ -291,13 +296,29 @@ pub fn openInitialSessionWithMissingCwd(
             api_key,
             tool_items,
             out_issue,
-        );
+        ), options.session_name);
+    }
+
+    if (options.session_id) |session_id| {
+        if (try session_lifecycle.findSessionFileByExactId(allocator, io, session_dir, session_id)) |session_path| {
+            defer allocator.free(session_path);
+            return finishOpenedSession(try openSessionAtPathCapturing(
+                allocator,
+                io,
+                session_path,
+                options,
+                model,
+                api_key,
+                tool_items,
+                out_issue,
+            ), options.session_name);
+        }
     }
 
     if (options.@"continue" or options.@"resume") {
         if (try session_manager_mod.findMostRecentSession(allocator, io, session_dir)) |recent| {
             defer allocator.free(recent);
-            return try openSessionAtPathCapturing(
+            return finishOpenedSession(try openSessionAtPathCapturing(
                 allocator,
                 io,
                 recent,
@@ -306,11 +327,11 @@ pub fn openInitialSessionWithMissingCwd(
                 api_key,
                 tool_items,
                 out_issue,
-            );
+            ), options.session_name);
         }
     }
 
-    return try createSeededSession(
+    return finishOpenedSession(try createSeededSession(
         allocator,
         io,
         options.cwd,
@@ -323,7 +344,20 @@ pub fn openInitialSessionWithMissingCwd(
         retry_settings,
         session_dir,
         &.{},
-    );
+        options.session_id,
+    ), options.session_name);
+}
+
+fn finishOpenedSession(session: session_mod.AgentSession, session_name: ?[]const u8) !session_mod.AgentSession {
+    var result = session;
+    errdefer result.deinit();
+    if (session_name) |raw| {
+        const trimmed = std.mem.trim(u8, raw, &std.ascii.whitespace);
+        if (trimmed.len > 0) {
+            _ = try result.session_manager.appendSessionInfo(trimmed);
+        }
+    }
+    return result;
 }
 
 fn openSessionAtPath(
@@ -479,6 +513,60 @@ test "openInitialSession honors no_session without creating a session file" {
     defer session.deinit();
 
     try std.testing.expect(session.session_manager.getSessionFile() == null);
+}
+
+test "openInitialSession uses exact session id and applies the display name" {
+    const allocator = std.testing.allocator;
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "workspace/sessions");
+
+    const root_dir = try makeSessionBootstrapTestPath(allocator, tmp, "workspace");
+    defer allocator.free(root_dir);
+    const session_dir = try makeSessionBootstrapTestPath(allocator, tmp, "workspace/sessions");
+    defer allocator.free(session_dir);
+
+    var current_provider = try provider_config.resolveProviderConfig(allocator, std.testing.io, &env_map, "faux", null, null, null);
+    defer current_provider.deinit(allocator);
+
+    const options = RunInteractiveModeOptions{
+        .cwd = root_dir,
+        .system_prompt = "sys",
+        .session_dir = session_dir,
+        .provider = "faux",
+        .session_id = "exact-id",
+        .session_name = "Night Shift",
+    };
+
+    var session = try openInitialSession(
+        allocator,
+        std.testing.io,
+        session_dir,
+        options,
+        current_provider.model,
+        current_provider.api_key,
+        &.{},
+    );
+    defer session.deinit();
+
+    try std.testing.expectEqualStrings("exact-id", session.session_manager.getSessionId());
+    try std.testing.expectEqualStrings("Night Shift", session.session_manager.getSessionName().?);
+
+    var reopened = try openInitialSession(
+        allocator,
+        std.testing.io,
+        session_dir,
+        options,
+        current_provider.model,
+        current_provider.api_key,
+        &.{},
+    );
+    defer reopened.deinit();
+    try std.testing.expectEqualStrings("exact-id", reopened.session_manager.getSessionId());
 }
 
 test "openInitialSession resumes the most recent session when continue is enabled" {

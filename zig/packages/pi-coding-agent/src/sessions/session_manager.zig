@@ -120,7 +120,17 @@ pub const SessionManager = struct {
         cwd: []const u8,
         session_dir: []const u8,
     ) !SessionManager {
-        var manager = try initEmpty(allocator, io, cwd, session_dir, true, null);
+        return createWithId(allocator, io, cwd, session_dir, null);
+    }
+
+    pub fn createWithId(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        cwd: []const u8,
+        session_dir: []const u8,
+        session_id: ?[]const u8,
+    ) !SessionManager {
+        var manager = try initEmpty(allocator, io, cwd, session_dir, true, null, session_id);
         errdefer manager.deinit();
         try manager.persistToDisk();
         return manager;
@@ -133,7 +143,7 @@ pub const SessionManager = struct {
         session_dir: []const u8,
         parent_session: ?[]const u8,
     ) !SessionManager {
-        var manager = try initEmpty(allocator, io, cwd, session_dir, true, parent_session);
+        var manager = try initEmpty(allocator, io, cwd, session_dir, true, parent_session, null);
         errdefer manager.deinit();
         try manager.persistToDisk();
         return manager;
@@ -144,7 +154,16 @@ pub const SessionManager = struct {
         io: std.Io,
         cwd: []const u8,
     ) !SessionManager {
-        return initEmpty(allocator, io, cwd, "", false, null);
+        return inMemoryWithId(allocator, io, cwd, null);
+    }
+
+    pub fn inMemoryWithId(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        cwd: []const u8,
+        session_id: ?[]const u8,
+    ) !SessionManager {
+        return initEmpty(allocator, io, cwd, "", false, null, session_id);
     }
 
     pub fn open(
@@ -584,6 +603,7 @@ pub const SessionManager = struct {
             self.session_dir,
             self.persist,
             if (self.persist) self.session_file else null,
+            null,
         );
         errdefer manager.deinit();
 
@@ -1157,8 +1177,12 @@ fn initEmpty(
     session_dir: []const u8,
     persist: bool,
     parent_session: ?[]const u8,
+    requested_session_id: ?[]const u8,
 ) !SessionManager {
-    const session_id = try generateSessionId(allocator);
+    const session_id = if (requested_session_id) |id|
+        try allocator.dupe(u8, id)
+    else
+        try generateSessionId(allocator);
     errdefer allocator.free(session_id);
 
     const timestamp = try nowTimestamp(allocator, io);

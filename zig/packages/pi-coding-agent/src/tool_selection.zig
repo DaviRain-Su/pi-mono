@@ -6,19 +6,31 @@ const std = @import("std");
 /// not be collapsed into the builtin-only case.
 pub const ToolSelection = struct {
     allowlist: ?[]const []const u8 = null,
+    denylist: ?[]const []const u8 = null,
     disable_all: bool = false,
     include_builtins: bool = true,
 
     pub fn fromCli(no_tools: bool, no_builtin_tools: bool, tools: ?[]const []const u8) ToolSelection {
+        return fromCliEx(no_tools, no_builtin_tools, tools, null);
+    }
+
+    pub fn fromCliEx(
+        no_tools: bool,
+        no_builtin_tools: bool,
+        tools: ?[]const []const u8,
+        exclude_tools: ?[]const []const u8,
+    ) ToolSelection {
         if (no_tools) {
             return .{
                 .allowlist = tools,
+                .denylist = exclude_tools,
                 .disable_all = true,
                 .include_builtins = false,
             };
         }
         return .{
             .allowlist = tools,
+            .denylist = exclude_tools,
             .include_builtins = !no_builtin_tools,
         };
     }
@@ -38,6 +50,11 @@ pub const ToolSelection = struct {
     }
 
     pub fn allowsName(self: ToolSelection, name: []const u8) bool {
+        if (self.denylist) |excluded| {
+            for (excluded) |denied| {
+                if (std.mem.eql(u8, denied, name)) return false;
+            }
+        }
         const allowlist = self.allowlist orelse return true;
         for (allowlist) |allowed| {
             if (std.mem.eql(u8, allowed, name)) return true;
@@ -64,4 +81,14 @@ test "ToolSelection distinguishes no-tools from no-builtin-tools" {
     try std.testing.expect(!allowlisted.allowsBuiltin("bash"));
     try std.testing.expect(allowlisted.allowsExtension("ext-tool"));
     try std.testing.expect(!allowlisted.allowsExtension("other-ext-tool"));
+}
+
+test "ToolSelection denylist excludes names after allowlist" {
+    const excluded = ToolSelection.fromCliEx(false, false, &.{ "read", "bash" }, &.{"bash"});
+    try std.testing.expect(excluded.allowsBuiltin("read"));
+    try std.testing.expect(!excluded.allowsBuiltin("bash"));
+
+    const denylist_only = ToolSelection.fromCliEx(false, false, null, &.{"ask_question"});
+    try std.testing.expect(denylist_only.allowsBuiltin("read"));
+    try std.testing.expect(!denylist_only.allowsExtension("ask_question"));
 }

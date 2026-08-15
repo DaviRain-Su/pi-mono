@@ -106,6 +106,7 @@ pub const AgentSession = struct {
         thinking_level: agent.ThinkingLevel = .off,
         tools: []const agent.AgentTool = &.{},
         session_dir: ?[]const u8 = null,
+        session_id: ?[]const u8 = null,
         compaction: CompactionSettings = .{},
         retry: RetrySettings = .{},
         extension_hosts: []const extension_runtime.RuntimeAdapter = &.{},
@@ -147,9 +148,9 @@ pub const AgentSession = struct {
         const manager = try allocator.create(session_manager.SessionManager);
         errdefer allocator.destroy(manager);
         manager.* = if (options.session_dir) |session_dir|
-            try session_manager.SessionManager.create(allocator, io, options.cwd, session_dir)
+            try session_manager.SessionManager.createWithId(allocator, io, options.cwd, session_dir, options.session_id)
         else
-            try session_manager.SessionManager.inMemory(allocator, io, options.cwd);
+            try session_manager.SessionManager.inMemoryWithId(allocator, io, options.cwd, options.session_id);
         errdefer manager.deinit();
 
         var instance = try initWithManager(

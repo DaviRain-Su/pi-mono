@@ -19,6 +19,7 @@ pub fn parseErrorMessage(err: cli.ParseArgsError) []const u8 {
         error.MissingOptionValue => "Missing value for option",
         error.InvalidMode => "Invalid mode. Expected one of: text, json, rpc, json-rpc, ts-rpc",
         error.InvalidThinkingLevel => "Invalid thinking level. Expected one of: off, minimal, low, medium, high, xhigh",
+        error.InvalidTuiMode => "Invalid TUI mode. Expected one of: regular, fullscreen",
         error.UnknownOption => "Unknown option",
         error.OutOfMemory => "Out of memory while parsing CLI arguments",
     };
@@ -34,7 +35,7 @@ pub fn resolveAppMode(mode: cli.Mode, print_requested: bool, stdin_is_tty: bool)
 }
 
 pub fn effectiveToolSelection(options: *const cli.Args) tool_selection.ToolSelection {
-    return tool_selection.ToolSelection.fromCli(options.no_tools, options.no_builtin_tools, options.tools);
+    return tool_selection.ToolSelection.fromCliEx(options.no_tools, options.no_builtin_tools, options.tools, options.exclude_tools);
 }
 
 pub fn offlineModeEnabled(options: *const cli.Args, env_map: *const std.process.Environ.Map) bool {

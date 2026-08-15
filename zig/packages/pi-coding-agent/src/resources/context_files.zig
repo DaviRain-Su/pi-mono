@@ -12,8 +12,11 @@ pub const ContextFile = struct {
 };
 
 const CONTEXT_FILENAMES = [_][]const u8{
+    "AGENTS.override.md",
     "AGENTS.md",
+    "AGENTS.MD",
     "CLAUDE.md",
+    "CLAUDE.MD",
     "SYSTEM.md",
 };
 
@@ -177,4 +180,31 @@ test "loadContextFiles falls back to SYSTEM.md when preferred files are absent" 
     try std.testing.expectEqualStrings("root system fallback", files[0].content);
     try std.testing.expect(std.mem.endsWith(u8, files[1].path, "/repo/src/feature/SYSTEM.md"));
     try std.testing.expectEqualStrings("cwd system fallback", files[1].content);
+}
+
+test "loadContextFiles prefers AGENTS.override.md over AGENTS.md" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "repo/.git");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "repo/AGENTS.md",
+        .data = "base agents",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "repo/AGENTS.override.md",
+        .data = "override agents",
+    });
+
+    const cwd = try makeTmpPath(allocator, tmp, "repo");
+    defer allocator.free(cwd);
+
+    const files = try loadContextFiles(allocator, std.testing.io, cwd);
+    defer deinitContextFiles(allocator, files);
+
+    try std.testing.expectEqual(@as(usize, 1), files.len);
+    try std.testing.expect(std.mem.endsWith(u8, files[0].path, "/repo/AGENTS.override.md"));
+    try std.testing.expectEqualStrings("override agents", files[0].content);
 }
