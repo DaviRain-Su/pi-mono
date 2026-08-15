@@ -630,7 +630,7 @@ fn fallbackModel(descriptor: ai.model_registry.ProviderConfig, model_id: []const
     };
 }
 
-fn hasProviderCredentials(
+pub fn hasProviderCredentials(
     allocator: std.mem.Allocator,
     env_map: *const std.process.Environ.Map,
     provider: []const u8,

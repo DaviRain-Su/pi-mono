@@ -24,10 +24,28 @@ const ParsedPattern = struct {
     thinking: ?cli.ThinkingLevel = null,
 };
 
+pub const HasConfiguredAuth = struct {
+    ctx: *const anyopaque,
+    func: *const fn (ctx: *const anyopaque, provider: []const u8) bool,
+
+    pub fn check(self: HasConfiguredAuth, provider: []const u8) bool {
+        return self.func(self.ctx, provider);
+    }
+};
+
 pub fn resolveCliModel(
     allocator: std.mem.Allocator,
     cli_provider: ?[]const u8,
     cli_model: ?[]const u8,
+) !ResolveCliModelResult {
+    return resolveCliModelWithAuth(allocator, cli_provider, cli_model, null);
+}
+
+pub fn resolveCliModelWithAuth(
+    allocator: std.mem.Allocator,
+    cli_provider: ?[]const u8,
+    cli_model: ?[]const u8,
+    has_auth: ?HasConfiguredAuth,
 ) !ResolveCliModelResult {
     const model_pattern = cli_model orelse return .{};
 
@@ -65,11 +83,8 @@ pub fn resolveCliModel(
     }
 
     if (provider == null) {
-        if (findExactReferenceMatch(summaries, model_pattern, null)) |exact| {
-            return .{
-                .provider_name = exact.provider,
-                .model_name = exact.id,
-            };
+        if (try resolveExactMatchesAcrossProviders(allocator, summaries, model_pattern, has_auth)) |resolved| {
+            return resolved;
         }
     }
 
@@ -83,6 +98,14 @@ pub fn resolveCliModel(
 
     const parsed = parseModelPattern(pattern, summaries, provider, false);
     if (parsed.model) |model| {
+        if (inferred_provider) {
+            if (preferAuthenticatedRawId(summaries, model_pattern, model, has_auth)) |raw| {
+                return .{
+                    .provider_name = raw.provider,
+                    .model_name = raw.id,
+                };
+            }
+        }
         return .{
             .provider_name = model.provider,
             .model_name = model.id,
@@ -132,6 +155,128 @@ pub fn resolveCliModel(
             .{model_pattern},
         ),
     };
+}
+
+fn resolveExactMatchesAcrossProviders(
+    allocator: std.mem.Allocator,
+    summaries: []const ai.model_registry.ModelSummary,
+    reference: []const u8,
+    has_auth: ?HasConfiguredAuth,
+) !?ResolveCliModelResult {
+    var matches: std.ArrayList(ai.model_registry.ModelSummary) = .empty;
+    defer matches.deinit(allocator);
+    try collectExactMatches(allocator, &matches, summaries, reference);
+    if (matches.items.len == 0) return null;
+    if (matches.items.len == 1) {
+        return .{
+            .provider_name = matches.items[0].provider,
+            .model_name = matches.items[0].id,
+        };
+    }
+
+    var authenticated: std.ArrayList(ai.model_registry.ModelSummary) = .empty;
+    defer authenticated.deinit(allocator);
+    for (matches.items) |summary| {
+        if (hasConfiguredAuth(has_auth, summary.provider)) {
+            try authenticated.append(allocator, summary);
+        }
+    }
+    if (authenticated.items.len == 1) {
+        return .{
+            .provider_name = authenticated.items[0].provider,
+            .model_name = authenticated.items[0].id,
+        };
+    }
+
+    const joined = try joinSortedModelRefs(allocator, matches.items);
+    defer allocator.free(joined);
+    const hint: []const u8 = if (authenticated.items.len == 0)
+        "No matching provider is authenticated."
+    else
+        "More than one matching provider is authenticated.";
+    return .{
+        .error_message = try std.fmt.allocPrint(
+            allocator,
+            "Model \"{s}\" is ambiguous across providers: {s}. {s} Use --provider or provider/model.",
+            .{ reference, joined, hint },
+        ),
+    };
+}
+
+fn collectExactMatches(
+    allocator: std.mem.Allocator,
+    matches: *std.ArrayList(ai.model_registry.ModelSummary),
+    summaries: []const ai.model_registry.ModelSummary,
+    reference: []const u8,
+) !void {
+    const trimmed = std.mem.trim(u8, reference, &std.ascii.whitespace);
+    if (trimmed.len == 0) return;
+    for (summaries) |summary| {
+        if (std.ascii.eqlIgnoreCase(summary.id, trimmed) or
+            canonicalReferenceMatches(trimmed, summary.provider, summary.id))
+        {
+            try matches.append(allocator, summary);
+        }
+    }
+}
+
+fn preferAuthenticatedRawId(
+    summaries: []const ai.model_registry.ModelSummary,
+    raw_id: []const u8,
+    inferred: ai.model_registry.ModelSummary,
+    has_auth: ?HasConfiguredAuth,
+) ?ai.model_registry.ModelSummary {
+    if (hasConfiguredAuth(has_auth, inferred.provider)) return null;
+
+    var chosen: ?ai.model_registry.ModelSummary = null;
+    for (summaries) |summary| {
+        if (std.ascii.eqlIgnoreCase(summary.provider, inferred.provider) and
+            std.ascii.eqlIgnoreCase(summary.id, inferred.id))
+        {
+            continue;
+        }
+        if (!std.ascii.eqlIgnoreCase(summary.id, raw_id)) continue;
+        if (!hasConfiguredAuth(has_auth, summary.provider)) continue;
+        if (chosen != null) return null;
+        chosen = summary;
+    }
+    return chosen;
+}
+
+fn hasConfiguredAuth(has_auth: ?HasConfiguredAuth, provider: []const u8) bool {
+    return if (has_auth) |probe| probe.check(provider) else false;
+}
+
+fn joinSortedModelRefs(
+    allocator: std.mem.Allocator,
+    matches: []const ai.model_registry.ModelSummary,
+) ![]u8 {
+    const refs = try allocator.alloc([]u8, matches.len);
+    var filled: usize = 0;
+    errdefer {
+        for (refs[0..filled]) |ref| allocator.free(ref);
+        allocator.free(refs);
+    }
+    for (matches, 0..) |summary, index| {
+        refs[index] = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ summary.provider, summary.id });
+        filled = index + 1;
+    }
+    std.mem.sort([]u8, refs, {}, struct {
+        fn lessThan(_: void, lhs: []u8, rhs: []u8) bool {
+            return std.mem.order(u8, lhs, rhs) == .lt;
+        }
+    }.lessThan);
+
+    var joined: std.ArrayList(u8) = .empty;
+    errdefer joined.deinit(allocator);
+    for (refs, 0..) |ref, index| {
+        if (index > 0) try joined.appendSlice(allocator, ", ");
+        try joined.appendSlice(allocator, ref);
+    }
+    const result = try joined.toOwnedSlice(allocator);
+    for (refs) |ref| allocator.free(ref);
+    allocator.free(refs);
+    return result;
 }
 
 fn parseModelPattern(
@@ -334,28 +479,28 @@ test "resolveCliModel supports fuzzy matching and thinking suffix" {
 
     try std.testing.expect(result.error_message == null);
     try std.testing.expectEqualStrings("anthropic", result.provider_name.?);
-    try std.testing.expectEqualStrings("claude-sonnet-4-6", result.model_name.?);
+    try std.testing.expectEqualStrings("claude-sonnet-5", result.model_name.?);
     try std.testing.expectEqual(cli.ThinkingLevel.high, result.thinking.?);
 }
 
 test "resolveCliModel prefers provider split over gateway raw id when provider model exists" {
     const allocator = std.testing.allocator;
-    var result = try resolveCliModel(allocator, null, "zai/glm-5.1");
+    var result = try resolveCliModel(allocator, null, "zai/glm-5.2");
     defer result.deinit(allocator);
 
     try std.testing.expect(result.error_message == null);
     try std.testing.expectEqualStrings("zai", result.provider_name.?);
-    try std.testing.expectEqualStrings("glm-5.1", result.model_name.?);
+    try std.testing.expectEqualStrings("glm-5.2", result.model_name.?);
 }
 
 test "resolveCliModel falls back to exact raw slash model id when inferred provider has no match" {
     const allocator = std.testing.allocator;
-    var result = try resolveCliModel(allocator, null, "openai/gpt-oss-120b:free");
+    var result = try resolveCliModel(allocator, null, "openai/gpt-3.5-turbo:batch");
     defer result.deinit(allocator);
 
     try std.testing.expect(result.error_message == null);
     try std.testing.expectEqualStrings("openrouter", result.provider_name.?);
-    try std.testing.expectEqualStrings("openai/gpt-oss-120b:free", result.model_name.?);
+    try std.testing.expectEqualStrings("openai/gpt-3.5-turbo:batch", result.model_name.?);
 }
 
 test "resolveCliModel preserves explicit provider custom model ids" {
@@ -378,4 +523,61 @@ test "resolveCliModel reports missing fuzzy matches without provider" {
     try std.testing.expect(result.model_name == null);
     try std.testing.expect(result.error_message != null);
     try std.testing.expect(std.mem.indexOf(u8, result.error_message.?, "not found") != null);
+}
+
+fn testAuthProbe(ctx: *const anyopaque, provider: []const u8) bool {
+    const names: *const []const []const u8 = @ptrCast(@alignCast(ctx));
+    for (names.*) |name| {
+        if (std.mem.eql(u8, name, provider)) return true;
+    }
+    return false;
+}
+
+test "resolveCliModel prefers the sole authenticated provider for an ambiguous bare id" {
+    const allocator = std.testing.allocator;
+    const names: []const []const u8 = &.{"openai"};
+    var result = try resolveCliModelWithAuth(allocator, null, "gpt-5.4", .{
+        .ctx = @ptrCast(&names),
+        .func = testAuthProbe,
+    });
+    defer result.deinit(allocator);
+
+    try std.testing.expect(result.error_message == null);
+    try std.testing.expectEqualStrings("openai", result.provider_name.?);
+    try std.testing.expectEqualStrings("gpt-5.4", result.model_name.?);
+}
+
+test "resolveCliModel requires --provider when a bare id is ambiguous" {
+    const allocator = std.testing.allocator;
+    var none = try resolveCliModel(allocator, null, "gpt-5.4");
+    defer none.deinit(allocator);
+    try std.testing.expect(none.provider_name == null);
+    try std.testing.expect(none.error_message != null);
+    try std.testing.expect(std.mem.indexOf(u8, none.error_message.?, "ambiguous across providers") != null);
+    try std.testing.expect(std.mem.indexOf(u8, none.error_message.?, "openai/gpt-5.4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, none.error_message.?, "github-copilot/gpt-5.4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, none.error_message.?, "No matching provider is authenticated.") != null);
+
+    const names: []const []const u8 = &.{ "openai", "github-copilot" };
+    var both = try resolveCliModelWithAuth(allocator, null, "gpt-5.4", .{
+        .ctx = @ptrCast(&names),
+        .func = testAuthProbe,
+    });
+    defer both.deinit(allocator);
+    try std.testing.expect(both.provider_name == null);
+    try std.testing.expect(std.mem.indexOf(u8, both.error_message.?, "More than one matching provider is authenticated.") != null);
+}
+
+test "resolveCliModel prefers an authenticated raw id over an unauthenticated inferred provider" {
+    const allocator = std.testing.allocator;
+    const names: []const []const u8 = &.{"openrouter"};
+    var result = try resolveCliModelWithAuth(allocator, null, "xiaomi/mimo-v2.5-pro", .{
+        .ctx = @ptrCast(&names),
+        .func = testAuthProbe,
+    });
+    defer result.deinit(allocator);
+
+    try std.testing.expect(result.error_message == null);
+    try std.testing.expectEqualStrings("openrouter", result.provider_name.?);
+    try std.testing.expectEqualStrings("xiaomi/mimo-v2.5-pro", result.model_name.?);
 }

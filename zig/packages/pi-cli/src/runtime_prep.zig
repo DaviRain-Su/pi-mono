@@ -370,7 +370,18 @@ fn selectInitialModel(
     options: *const cli.Args,
 ) !InitialModelSelection {
     if (options.model) |cli_model| {
-        var resolved = try model_resolver.resolveCliModel(allocator, options.provider, cli_model);
+        const auth_probe_ctx = ModelAuthProbe{
+            .allocator = allocator,
+            .env_map = env_map,
+            .credentials = .{
+                .auth_tokens = &runtime_config.auth_tokens,
+                .provider_api_keys = &runtime_config.provider_api_keys,
+            },
+        };
+        var resolved = try model_resolver.resolveCliModelWithAuth(allocator, options.provider, cli_model, .{
+            .ctx = @ptrCast(&auth_probe_ctx),
+            .func = modelAuthProbeFn,
+        });
         errdefer resolved.deinit(allocator);
 
         if (resolved.error_message) |_| {
@@ -443,6 +454,22 @@ fn selectInitialModel(
         .provider_name = "openai",
         .model_name = null,
     };
+}
+
+const ModelAuthProbe = struct {
+    allocator: std.mem.Allocator,
+    env_map: *const std.process.Environ.Map,
+    credentials: coding_agent.provider_config.ConfiguredCredentials,
+};
+
+fn modelAuthProbeFn(ctx: *const anyopaque, provider: []const u8) bool {
+    const probe: *const ModelAuthProbe = @ptrCast(@alignCast(ctx));
+    return coding_agent.provider_config.hasProviderCredentials(
+        probe.allocator,
+        probe.env_map,
+        provider,
+        probe.credentials,
+    ) catch false;
 }
 
 fn expandMessages(
