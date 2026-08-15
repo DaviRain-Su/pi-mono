@@ -918,7 +918,7 @@ fn processGoogleSseData(
 
     if (candidate.object.get("finishReason")) |finish_reason| {
         if (finish_reason == .string) {
-            output.stop_reason = if (tool_calls.items.len > 0) .tool_use else mapStopReason(finish_reason.string);
+            applyGoogleFinishReason(output, finish_reason.string, tool_calls.items.len > 0);
         }
     }
 
@@ -1091,6 +1091,13 @@ fn mapToolChoice(tool_choice: []const u8) []const u8 {
 
 fn mapStopReason(reason: []const u8) types.StopReason {
     return stop_reason_mod.mapStopReasonFromTable(&stop_reason_mod.google_mappings, reason, .error_reason);
+}
+
+fn applyGoogleFinishReason(output: *types.AssistantMessage, finish_reason: []const u8, has_tool_calls: bool) void {
+    output.stop_reason = mapStopReason(finish_reason);
+    if (has_tool_calls and output.stop_reason == .stop) {
+        output.stop_reason = .tool_use;
+    }
 }
 
 fn generateToolCallId(allocator: std.mem.Allocator, counter: *usize) ![]const u8 {
@@ -1578,6 +1585,49 @@ test "parse stream regenerates duplicate functionCall ids" {
     try std.testing.expectEqualStrings("dup-id", done.message.?.content[0].tool_call.id);
     try std.testing.expect(!std.mem.eql(u8, "dup-id", done.message.?.content[1].tool_call.id));
 }
+
+test "parse stream preserves length stop when tool calls hit MAX_TOKENS" {
+    const allocator = std.heap.page_allocator;
+    const io = std.Io.failing;
+
+    const body = try allocator.dupe(
+        u8,
+        "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"id\":\"call-1\",\"name\":\"get_weather\",\"args\":{\"city\":\"Berlin\"}}}]},\"finishReason\":\"MAX_TOKENS\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":5,\"totalTokenCount\":15}}\n" ++
+            "data: [DONE]\n",
+    );
+
+    var stream_instance = event_stream.createAssistantMessageEventStream(allocator, io);
+    defer stream_instance.deinit();
+
+    var streaming = http_client.StreamingResponse{
+        .status = 200,
+        .body = body,
+        .buffer = .empty,
+        .allocator = allocator,
+    };
+    defer streaming.deinit();
+
+    const model = types.Model{
+        .id = "gemini-2.5-pro",
+        .name = "Gemini 2.5 Pro",
+        .api = "google-generative-ai",
+        .provider = "google",
+        .base_url = "https://generativelanguage.googleapis.com/v1beta",
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 1048576,
+        .max_tokens = 65535,
+    };
+
+    try parseSseStreamLines(allocator, &stream_instance, &streaming, model, null);
+    while (stream_instance.next()) |event| {
+        if (event.event_type == .done) {
+            try std.testing.expectEqual(types.StopReason.length, event.message.?.stop_reason);
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "parse stream emits thinking and tool call events" {
     const allocator = std.heap.page_allocator;
     const io = std.Io.failing;

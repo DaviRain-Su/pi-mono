@@ -4,6 +4,7 @@ const provider_json = @import("../shared/provider_json.zig");
 const provider_json_put = @import("../shared/provider_json_put.zig");
 const transform_messages = @import("../shared/transform_messages.zig");
 const sanitize_unicode = @import("../shared/sanitize_unicode.zig");
+const string_utils = @import("../shared/string_utils.zig");
 
 const putBoolValue = provider_json_put.putBoolValue;
 const putStringValue = provider_json_put.putStringValue;
@@ -139,6 +140,7 @@ const ChatRequestPayload = struct {
     // Reasoning shape variants — at most a few are non-null per request:
     enable_thinking: ?bool = null,
     chat_template_kwargs: ?QwenChatTemplateKwargs = null,
+    chat_template_args: ?BasetenChatTemplateArgs = null,
     thinking: ?DeepseekThinking = null,
     reasoning_effort: ?[]const u8 = null,
     reasoning: ?ReasoningBlock = null, // openrouter / together
@@ -149,6 +151,7 @@ const ChatRequestPayload = struct {
 
 const StreamOptionsField = struct { include_usage: bool };
 const QwenChatTemplateKwargs = struct { enable_thinking: bool, preserve_thinking: bool };
+const BasetenChatTemplateArgs = struct { enable_thinking: bool };
 const DeepseekThinking = struct { type: []const u8 };
 
 /// Reasoning block emitted by openrouter/together thinking_format
@@ -306,6 +309,7 @@ fn buildOwnedChat(
     // Reasoning fields (5-branch dispatch on compat.thinking_format).
     var enable_thinking_field: ?bool = null;
     var chat_template_kwargs: ?QwenChatTemplateKwargs = null;
+    var chat_template_args: ?BasetenChatTemplateArgs = null;
     var thinking_field: ?DeepseekThinking = null;
     var reasoning_effort: ?[]const u8 = null;
     var reasoning_block: ?ReasoningBlock = null;
@@ -317,6 +321,20 @@ fn buildOwnedChat(
             enable_thinking_field = (effort != null);
         } else if (std.mem.eql(u8, compat.thinking_format, "qwen-chat-template")) {
             chat_template_kwargs = .{ .enable_thinking = (effort != null), .preserve_thinking = true };
+        } else if (std.mem.eql(u8, compat.thinking_format, "baseten")) {
+            chat_template_args = .{ .enable_thinking = (effort != null) };
+            if (compat.supports_reasoning_effort) {
+                if (effort) |value| {
+                    reasoning_effort = mappedReasoningEffort(model, value);
+                } else if (model.thinking_level_map) |level_map| {
+                    if (level_map.off) |off_mapping| {
+                        switch (off_mapping) {
+                            .mapped => |mapped| reasoning_effort = mapped,
+                            .unsupported => {},
+                        }
+                    }
+                }
+            }
         } else if (std.mem.eql(u8, compat.thinking_format, "deepseek")) {
             thinking_field = .{ .type = if (effort != null) "enabled" else "disabled" };
             if (effort) |value| reasoning_effort = value;
@@ -383,6 +401,7 @@ fn buildOwnedChat(
             .tool_stream = tool_stream,
             .enable_thinking = enable_thinking_field,
             .chat_template_kwargs = chat_template_kwargs,
+            .chat_template_args = chat_template_args,
             .thinking = thinking_field,
             .reasoning_effort = reasoning_effort,
             .reasoning = reasoning_block,
@@ -682,18 +701,20 @@ const OpenAICompatFlavor = struct {
 /// field is either set by at most one flavor or set to the same value by all
 /// flavors that override it.
 const FLAVORS: []const OpenAICompatFlavor = &.{
-    // DeepSeek matched by provider id only — note: provider="deepseek" does
-    // NOT mark the model non-standard; only the deepseek.com URL does. This
-    // mirrors TypeScript's `detectCompat` in `openai-completions.ts`.
+    // DeepSeek official and custom DeepSeek-compatible hosts send output
+    // limits through `max_tokens`. Hostname matching is case-insensitive.
     .{
         .providers = &.{"deepseek"},
+        .is_non_standard = true,
         .requires_reasoning_content_on_assistant_messages = true,
+        .max_tokens_field = "max_tokens",
         .thinking_format = "deepseek",
     },
     .{
         .base_url_substrings = &.{"deepseek.com"},
         .is_non_standard = true,
         .requires_reasoning_content_on_assistant_messages = true,
+        .max_tokens_field = "max_tokens",
         .thinking_format = "deepseek",
     },
     .{
@@ -761,7 +782,7 @@ fn flavorMatches(model: types.Model, comptime flavor: OpenAICompatFlavor) bool {
         if (std.mem.eql(u8, model.provider, p)) return true;
     }
     inline for (flavor.base_url_substrings) |s| {
-        if (std.mem.indexOf(u8, model.base_url, s) != null) return true;
+        if (string_utils.containsIgnoreCase(model.base_url, s)) return true;
     }
     return false;
 }
@@ -1437,4 +1458,78 @@ test "Together reasoning payload preserves supported mapped effort" {
     defer provider_json.freeValue(allocator, disabled_payload);
     try std.testing.expectEqual(false, disabled_payload.object.get("reasoning").?.object.get("enabled").?.bool);
     try std.testing.expect(disabled_payload.object.get("reasoning_effort") == null);
+}
+
+test "DeepSeek hosts send max_tokens and match mixed-case base URLs" {
+    const allocator = std.testing.allocator;
+    const context = types.Context{ .messages = &[_]types.Message{} };
+
+    const official = types.Model{
+        .id = "deepseek-v4-pro",
+        .name = "DeepSeek V4 Pro",
+        .api = "openai-completions",
+        .provider = "deepseek",
+        .base_url = "https://api.deepseek.com",
+        .reasoning = true,
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 1000000,
+        .max_tokens = 384000,
+    };
+    const official_payload = try buildRequestPayload(allocator, official, context, .{ .max_tokens = 128 });
+    defer provider_json.freeValue(allocator, official_payload);
+    try std.testing.expectEqual(@as(i64, 128), official_payload.object.get("max_tokens").?.integer);
+    try std.testing.expect(official_payload.object.get("max_completion_tokens") == null);
+
+    const mixed_case = types.Model{
+        .id = "custom-deepseek",
+        .name = "Custom DeepSeek",
+        .api = "openai-completions",
+        .provider = "custom",
+        .base_url = "https://API.DeepSeek.COM/v1",
+        .reasoning = true,
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 128000,
+        .max_tokens = 8192,
+    };
+    const mixed_payload = try buildRequestPayload(allocator, mixed_case, context, .{ .max_tokens = 64 });
+    defer provider_json.freeValue(allocator, mixed_payload);
+    try std.testing.expectEqual(@as(i64, 64), mixed_payload.object.get("max_tokens").?.integer);
+    try std.testing.expect(mixed_payload.object.get("max_completion_tokens") == null);
+}
+
+test "Baseten thinking format emits chat_template_args" {
+    const allocator = std.testing.allocator;
+
+    var compat = try std.json.ObjectMap.init(allocator, &[_][]const u8{}, &[_]std.json.Value{});
+    try compat.put(allocator, try allocator.dupe(u8, "thinkingFormat"), .{ .string = try allocator.dupe(u8, "baseten") });
+    try compat.put(allocator, try allocator.dupe(u8, "supportsReasoningEffort"), .{ .bool = true });
+    const compat_value = std.json.Value{ .object = compat };
+    defer provider_json.freeValue(allocator, compat_value);
+
+    const model = types.Model{
+        .id = "zai-org/GLM-5.2",
+        .name = "GLM 5.2",
+        .api = "openai-completions",
+        .provider = "baseten",
+        .base_url = "https://inference.baseten.co/v1",
+        .reasoning = true,
+        .thinking_level_map = .{ .off = .{ .mapped = "none" }, .high = .{ .mapped = "high" } },
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 202752,
+        .max_tokens = 131072,
+        .compat = compat_value,
+    };
+    const context = types.Context{ .messages = &[_]types.Message{} };
+
+    const enabled_payload = try buildRequestPayload(allocator, model, context, .{
+        .provider = .{ .openai = .{ .reasoning_effort = "high" } },
+    });
+    defer provider_json.freeValue(allocator, enabled_payload);
+    try std.testing.expectEqual(true, enabled_payload.object.get("chat_template_args").?.object.get("enable_thinking").?.bool);
+    try std.testing.expectEqualStrings("high", enabled_payload.object.get("reasoning_effort").?.string);
+
+    const disabled_payload = try buildRequestPayload(allocator, model, context, null);
+    defer provider_json.freeValue(allocator, disabled_payload);
+    try std.testing.expectEqual(false, disabled_payload.object.get("chat_template_args").?.object.get("enable_thinking").?.bool);
+    try std.testing.expectEqualStrings("none", disabled_payload.object.get("reasoning_effort").?.string);
 }

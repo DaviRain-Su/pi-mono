@@ -1445,7 +1445,7 @@ fn processVertexSseObject(
 
     if (candidate.object.get("finishReason")) |finish_reason| {
         if (finish_reason == .string) {
-            state.output.stop_reason = if (state.tool_calls.items.len > 0) .tool_use else mapStopReason(finish_reason.string);
+            applyGoogleFinishReason(state.output, finish_reason.string, state.tool_calls.items.len > 0);
         }
     }
 }
@@ -1745,6 +1745,13 @@ fn mapStopReason(reason: []const u8) types.StopReason {
     return stop_reason_mod.mapStopReasonFromTable(&stop_reason_mod.google_mappings, reason, .error_reason);
 }
 
+fn applyGoogleFinishReason(output: *types.AssistantMessage, finish_reason: []const u8, has_tool_calls: bool) void {
+    output.stop_reason = mapStopReason(finish_reason);
+    if (has_tool_calls and output.stop_reason == .stop) {
+        output.stop_reason = .tool_use;
+    }
+}
+
 fn generateToolCallId(allocator: std.mem.Allocator, counter: *usize) ![]const u8 {
     counter.* += 1;
     return try std.fmt.allocPrint(allocator, "vertex-call-{d}", .{counter.*});
@@ -2025,6 +2032,48 @@ test "parse stream emits Vertex thinking, tool, and text events" {
     try std.testing.expectEqualStrings("resp-vertex", done.message.?.response_id.?);
     try std.testing.expectEqual(@as(usize, 3), done.message.?.content.len);
     try std.testing.expectEqualStrings("It is sunny.", done.message.?.content[2].text.text);
+}
+
+test "parse stream preserves length stop when tool calls hit MAX_TOKENS" {
+    const allocator = std.heap.page_allocator;
+    const io = std.Io.failing;
+
+    const body = try allocator.dupe(
+        u8,
+        "data: {\"responseId\":\"resp-vertex-length\",\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"get_weather\",\"args\":{\"city\":\"Berlin\"}}}]},\"finishReason\":\"MAX_TOKENS\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":5,\"totalTokenCount\":15}}\n" ++
+            "data: [DONE]\n",
+    );
+
+    var stream_instance = event_stream.createAssistantMessageEventStream(allocator, io);
+    defer stream_instance.deinit();
+
+    var streaming = http_client.StreamingResponse{
+        .status = 200,
+        .body = body,
+        .buffer = .empty,
+        .allocator = allocator,
+    };
+    defer streaming.deinit();
+
+    const model = types.Model{
+        .id = "gemini-2.5-pro",
+        .name = "Vertex Gemini 2.5 Pro",
+        .api = "google-vertex",
+        .provider = "google-vertex",
+        .base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google",
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 1048576,
+        .max_tokens = 65535,
+    };
+
+    try parseSseStreamLines(allocator, &stream_instance, &streaming, model, null);
+    while (stream_instance.next()) |event| {
+        if (event.event_type == .done) {
+            try std.testing.expectEqual(types.StopReason.length, event.message.?.stop_reason);
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
 }
 
 test "stream HTTP status error is terminal sanitized event" {

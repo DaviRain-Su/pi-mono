@@ -183,7 +183,7 @@ test "TS RPC M3 model thinking and queue controls use TS response bytes" {
 
     try expectContains(
         stdout_capture.writer.buffered(),
-        "{\"id\":\"model\",\"type\":\"response\",\"command\":\"set_model\",\"success\":true,\"data\":{\"id\":\"claude-sonnet-4-5\",\"name\":\"Claude Sonnet 4.5 (latest)\",\"api\":\"anthropic-messages\",\"provider\":\"anthropic\",\"baseUrl\":\"https://api.anthropic.com\",\"reasoning\":true,\"input\":[\"text\",\"image\"],\"cost\":{\"input\":3,\"output\":15,\"cacheRead\":0.3,\"cacheWrite\":3.75},\"contextWindow\":200000,\"maxTokens\":64000}}\n",
+        "{\"id\":\"model\",\"type\":\"response\",\"command\":\"set_model\",\"success\":true,\"data\":{\"id\":\"claude-sonnet-4-5\",\"name\":\"Claude Sonnet 4.5 (latest)\",\"api\":\"anthropic-messages\",\"provider\":\"anthropic\",\"baseUrl\":\"https://api.anthropic.com\",\"reasoning\":true,\"input\":[\"text\",\"image\"],\"cost\":{\"input\":3,\"output\":15,\"cacheRead\":0.3,\"cacheWrite\":3.75},\"contextWindow\":1000000,\"maxTokens\":64000,\"compat\":{\"supportsStrictTools\":true}}}\n",
     );
     try expectContains(stdout_capture.writer.buffered(), "{\"id\":\"missing\",\"type\":\"response\",\"command\":\"set_model\",\"success\":false,\"error\":\"Model not found: anthropic/missing-model\"}\n");
     try expectContains(stdout_capture.writer.buffered(), "{\"id\":\"cycle_model\",\"type\":\"response\",\"command\":\"cycle_model\",\"success\":true,\"data\":null}\n");

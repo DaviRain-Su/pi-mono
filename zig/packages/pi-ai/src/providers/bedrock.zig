@@ -1254,13 +1254,46 @@ fn buildReasoningContentBlock(allocator: std.mem.Allocator, thinking_text: []con
     return .{ .object = block_object };
 }
 
+fn sanitizeBedrockDocument(allocator: std.mem.Allocator, value: std.json.Value) !std.json.Value {
+    return switch (value) {
+        .array => |array| blk: {
+            var cloned = std.json.Array.init(allocator);
+            errdefer {
+                for (cloned.items) |item| provider_json.freeValue(allocator, item);
+                cloned.deinit();
+            }
+            for (array.items) |item| {
+                const cloned_item = try sanitizeBedrockDocument(allocator, item);
+                errdefer provider_json.freeValue(allocator, cloned_item);
+                try cloned.append(cloned_item);
+            }
+            break :blk .{ .array = cloned };
+        },
+        .object => |object| blk: {
+            var cloned = try provider_json.initObject(allocator);
+            errdefer provider_json.freeValue(allocator, .{ .object = cloned });
+            var iterator = object.iterator();
+            while (iterator.next()) |entry| {
+                if (entry.key_ptr.*.len == 0) continue;
+                const key = try allocator.dupe(u8, entry.key_ptr.*);
+                errdefer allocator.free(key);
+                const cloned_value = try sanitizeBedrockDocument(allocator, entry.value_ptr.*);
+                errdefer provider_json.freeValue(allocator, cloned_value);
+                try cloned.put(allocator, key, cloned_value);
+            }
+            break :blk .{ .object = cloned };
+        },
+        else => try provider_json.cloneValue(allocator, value),
+    };
+}
+
 fn buildToolUseBlock(allocator: std.mem.Allocator, tool_call: types.ToolCall) !std.json.Value {
     const tool_use_value: std.json.Value = blk: {
         var tool_use = try provider_json.initObject(allocator);
         errdefer provider_json.freeValue(allocator, .{ .object = tool_use });
         try putStringValue(allocator, &tool_use, "toolUseId", tool_call.id);
         try putStringValue(allocator, &tool_use, "name", tool_call.name);
-        try putObjectValue(allocator, &tool_use, "input", try provider_json.cloneValue(allocator, tool_call.arguments));
+        try putObjectValue(allocator, &tool_use, "input", try sanitizeBedrockDocument(allocator, tool_call.arguments));
         break :blk .{ .object = tool_use };
     };
     var object = try provider_json.initObject(allocator);
@@ -3370,6 +3403,60 @@ test "buildRequestPayload includes bedrock system messages inference config and 
     try std.testing.expect(object.get("toolConfig") != null);
     try std.testing.expectEqual(@as(i64, 512), object.get("inferenceConfig").?.object.get("maxTokens").?.integer);
     try std.testing.expectEqualStrings("Hello Bedrock", object.get("messages").?.array.items[0].object.get("content").?.array.items[0].object.get("text").?.string);
+}
+
+test "buildRequestPayload drops empty tool argument keys and keeps nested values" {
+    const allocator = std.testing.allocator;
+
+    var nested = try provider_json.initObject(allocator);
+    try nested.put(allocator, try allocator.dupe(u8, "keep"), .{ .string = try allocator.dupe(u8, "yes") });
+    try nested.put(allocator, try allocator.dupe(u8, ""), .{ .string = try allocator.dupe(u8, "drop-nested") });
+
+    var arguments = try provider_json.initObject(allocator);
+    try arguments.put(allocator, try allocator.dupe(u8, "city"), .{ .string = try allocator.dupe(u8, "Berlin") });
+    try arguments.put(allocator, try allocator.dupe(u8, ""), .{ .string = try allocator.dupe(u8, "drop") });
+    try arguments.put(allocator, try allocator.dupe(u8, "nested"), .{ .object = nested });
+    const arguments_value = std.json.Value{ .object = arguments };
+    defer provider_json.freeValue(allocator, arguments_value);
+
+    const model = types.Model{
+        .id = "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        .name = "Claude 3.7 Sonnet",
+        .api = "bedrock-converse-stream",
+        .provider = "amazon-bedrock",
+        .base_url = "https://bedrock-runtime.us-east-1.amazonaws.com",
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 200000,
+        .max_tokens = 8192,
+    };
+    const user_content = [_]types.ContentBlock{.{ .text = .{ .text = "weather" } }};
+    const assistant_content = [_]types.ContentBlock{.{ .tool_call = .{
+        .id = "tool-1",
+        .name = "get_weather",
+        .arguments = arguments_value,
+    } }};
+
+    const payload = try buildRequestPayload(allocator, model, .{ .messages = &[_]types.Message{
+        .{ .user = .{ .content = &user_content, .timestamp = 1 } },
+        .{ .assistant = .{
+            .content = &assistant_content,
+            .api = "bedrock-converse-stream",
+            .provider = "amazon-bedrock",
+            .model = "anthropic.claude-3-7-sonnet-20250219-v1:0",
+            .usage = types.Usage.init(),
+            .stop_reason = .tool_use,
+            .timestamp = 2,
+        } },
+    } }, null);
+    defer provider_json.freeValue(allocator, payload);
+
+    const input = payload.object.get("messages").?.array.items[1]
+        .object.get("content").?.array.items[0]
+        .object.get("toolUse").?.object.get("input").?.object;
+    try std.testing.expectEqualStrings("Berlin", input.get("city").?.string);
+    try std.testing.expect(input.get("") == null);
+    try std.testing.expectEqualStrings("yes", input.get("nested").?.object.get("keep").?.string);
+    try std.testing.expect(input.get("nested").?.object.get("") == null);
 }
 
 test "signRequestHeaders creates sigv4 authorization and security token" {

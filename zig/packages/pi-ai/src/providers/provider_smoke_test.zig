@@ -192,15 +192,6 @@ test "provider smoke Moonshot and Kimi Code standalone captures OpenAI routing a
             .expected_request_line = "POST /v1/chat/completions HTTP/1.1",
             .expected_auth_header = "\r\nauthorization: bearer provider-smoke-key\r\n",
         },
-        .{
-            .provider = "kimi-code-openai",
-            .api = "openai-completions",
-            .model_id = "kimi-for-coding",
-            .base_path = "/coding/v1",
-            .expected_request_line = "POST /coding/v1/chat/completions HTTP/1.1",
-            .expected_auth_header = "\r\nauthorization: bearer provider-smoke-key\r\n",
-            .forbidden_auth_header = "\r\nuser-agent: kimicli/1.5\r\n",
-        },
     };
 
     for (cases) |case| {
@@ -234,7 +225,7 @@ test "provider smoke Kimi Code Anthropic captures routing auth and metadata" {
     try runAnthropicCapture(case);
 }
 
-test "provider smoke Xiaomi standalone captures Anthropic routing auth and metadata" {
+test "provider smoke Xiaomi standalone captures OpenAI routing auth and metadata" {
     const cases = [_]struct {
         expectation: CaptureExpectation,
         expected_base_url: []const u8,
@@ -242,50 +233,46 @@ test "provider smoke Xiaomi standalone captures Anthropic routing auth and metad
         .{
             .expectation = .{
                 .provider = "xiaomi",
-                .api = "anthropic-messages",
+                .api = "openai-completions",
                 .model_id = "mimo-v2.5-pro",
-                .base_path = "/anthropic",
-                .expected_request_line = "POST /anthropic/v1/messages HTTP/1.1",
-                .expected_auth_header = "\r\nx-api-key: provider-smoke-key\r\n",
-                .forbidden_auth_header = "\r\nauthorization:",
+                .base_path = "/v1",
+                .expected_request_line = "POST /v1/chat/completions HTTP/1.1",
+                .expected_auth_header = "\r\nauthorization: bearer provider-smoke-key\r\n",
             },
-            .expected_base_url = "https://api.xiaomimimo.com/anthropic",
+            .expected_base_url = "https://api.xiaomimimo.com/v1",
         },
         .{
             .expectation = .{
                 .provider = "xiaomi-token-plan-cn",
-                .api = "anthropic-messages",
+                .api = "openai-completions",
                 .model_id = "mimo-v2.5-pro",
-                .base_path = "/anthropic",
-                .expected_request_line = "POST /anthropic/v1/messages HTTP/1.1",
-                .expected_auth_header = "\r\nx-api-key: provider-smoke-key\r\n",
-                .forbidden_auth_header = "\r\nauthorization:",
+                .base_path = "/v1",
+                .expected_request_line = "POST /v1/chat/completions HTTP/1.1",
+                .expected_auth_header = "\r\nauthorization: bearer provider-smoke-key\r\n",
             },
-            .expected_base_url = "https://token-plan-cn.xiaomimimo.com/anthropic",
+            .expected_base_url = "https://token-plan-cn.xiaomimimo.com/v1",
         },
         .{
             .expectation = .{
                 .provider = "xiaomi-token-plan-ams",
-                .api = "anthropic-messages",
+                .api = "openai-completions",
                 .model_id = "mimo-v2.5-pro",
-                .base_path = "/anthropic",
-                .expected_request_line = "POST /anthropic/v1/messages HTTP/1.1",
-                .expected_auth_header = "\r\nx-api-key: provider-smoke-key\r\n",
-                .forbidden_auth_header = "\r\nauthorization:",
+                .base_path = "/v1",
+                .expected_request_line = "POST /v1/chat/completions HTTP/1.1",
+                .expected_auth_header = "\r\nauthorization: bearer provider-smoke-key\r\n",
             },
-            .expected_base_url = "https://token-plan-ams.xiaomimimo.com/anthropic",
+            .expected_base_url = "https://token-plan-ams.xiaomimimo.com/v1",
         },
         .{
             .expectation = .{
                 .provider = "xiaomi-token-plan-sgp",
-                .api = "anthropic-messages",
+                .api = "openai-completions",
                 .model_id = "mimo-v2.5-pro",
-                .base_path = "/anthropic",
-                .expected_request_line = "POST /anthropic/v1/messages HTTP/1.1",
-                .expected_auth_header = "\r\nx-api-key: provider-smoke-key\r\n",
-                .forbidden_auth_header = "\r\nauthorization:",
+                .base_path = "/v1",
+                .expected_request_line = "POST /v1/chat/completions HTTP/1.1",
+                .expected_auth_header = "\r\nauthorization: bearer provider-smoke-key\r\n",
             },
-            .expected_base_url = "https://token-plan-sgp.xiaomimimo.com/anthropic",
+            .expected_base_url = "https://token-plan-sgp.xiaomimimo.com/v1",
         },
     };
 
@@ -299,7 +286,7 @@ test "provider smoke Xiaomi standalone captures Anthropic routing auth and metad
         try std.testing.expectEqualStrings(expectation.provider, registered_model.provider);
         try std.testing.expectEqualStrings(expectation.api, registered_model.api);
         try std.testing.expectEqualStrings(case.expected_base_url, registered_model.base_url);
-        try runAnthropicCapture(expectation);
+        try runOpenAICompatCapture(expectation);
     }
 }
 
@@ -484,7 +471,6 @@ test "provider smoke Moonshot Kimi Code and Cloudflare setup failures are termin
     const openai_cases = [_]CaptureExpectation{
         .{ .provider = "moonshotai", .api = "openai-completions", .model_id = "kimi-k2.6", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
         .{ .provider = "moonshotai-cn", .api = "openai-completions", .model_id = "kimi-k2.6", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
-        .{ .provider = "kimi-code-openai", .api = "openai-completions", .model_id = "kimi-for-coding", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
         .{ .provider = "cloudflare-workers-ai", .api = "openai-completions", .model_id = "@cf/moonshotai/kimi-k2.6", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
         .{ .provider = "cloudflare-ai-gateway", .api = "openai-completions", .model_id = "workers-ai/@cf/moonshotai/kimi-k2.6", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
     };
@@ -526,12 +512,12 @@ test "provider smoke Moonshot Kimi Code and Cloudflare setup failures are termin
 
 test "provider smoke Xiaomi setup failures are terminal error events" {
     const cases = [_]CaptureExpectation{
-        .{ .provider = "xiaomi", .api = "anthropic-messages", .model_id = "mimo-v2.5-pro", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
-        .{ .provider = "xiaomi-token-plan-cn", .api = "anthropic-messages", .model_id = "mimo-v2.5-pro", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
-        .{ .provider = "xiaomi-token-plan-ams", .api = "anthropic-messages", .model_id = "mimo-v2.5-pro", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
-        .{ .provider = "xiaomi-token-plan-sgp", .api = "anthropic-messages", .model_id = "mimo-v2.5-pro", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
+        .{ .provider = "xiaomi", .api = "openai-completions", .model_id = "mimo-v2.5-pro", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
+        .{ .provider = "xiaomi-token-plan-cn", .api = "openai-completions", .model_id = "mimo-v2.5-pro", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
+        .{ .provider = "xiaomi-token-plan-ams", .api = "openai-completions", .model_id = "mimo-v2.5-pro", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
+        .{ .provider = "xiaomi-token-plan-sgp", .api = "openai-completions", .model_id = "mimo-v2.5-pro", .base_path = "", .expected_request_line = "", .expected_auth_header = "" },
     };
-    for (cases) |case| try expectProviderSetupFailure(anthropic.AnthropicProvider, case);
+    for (cases) |case| try expectProviderSetupFailure(openai.OpenAIProvider, case);
 }
 
 test "provider smoke Cloudflare Responses placeholder failure is terminal error event" {

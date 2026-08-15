@@ -490,6 +490,11 @@ test "phase4 provider expansion models route through shared api streams" {
         .stream_simple = recordingStreamSimple,
     });
     try api_registry.register(.{
+        .api = "openai-responses",
+        .stream = recordingStream,
+        .stream_simple = recordingStreamSimple,
+    });
+    try api_registry.register(.{
         .api = "anthropic-messages",
         .stream = recordingStream,
         .stream_simple = recordingStreamSimple,
@@ -499,7 +504,7 @@ test "phase4 provider expansion models route through shared api streams" {
         provider: []const u8,
         expected_api: []const u8,
     }{
-        .{ .provider = "xai", .expected_api = "openai-completions" },
+        .{ .provider = "xai", .expected_api = "openai-responses" },
         .{ .provider = "groq", .expected_api = "openai-completions" },
         .{ .provider = "cerebras", .expected_api = "openai-completions" },
         .{ .provider = "openrouter", .expected_api = "openai-completions" },
@@ -508,16 +513,19 @@ test "phase4 provider expansion models route through shared api streams" {
         .{ .provider = "minimax", .expected_api = "anthropic-messages" },
         .{ .provider = "moonshotai", .expected_api = "openai-completions" },
         .{ .provider = "moonshotai-cn", .expected_api = "openai-completions" },
-        .{ .provider = "kimi-code-openai", .expected_api = "openai-completions" },
         .{ .provider = "cloudflare-workers-ai", .expected_api = "openai-completions" },
         .{ .provider = "cloudflare-ai-gateway", .expected_api = "openai-completions" },
         .{ .provider = "huggingface", .expected_api = "openai-completions" },
         .{ .provider = "fireworks", .expected_api = "anthropic-messages" },
         .{ .provider = "opencode", .expected_api = "openai-completions" },
-        .{ .provider = "xiaomi", .expected_api = "anthropic-messages" },
-        .{ .provider = "xiaomi-token-plan-cn", .expected_api = "anthropic-messages" },
-        .{ .provider = "xiaomi-token-plan-ams", .expected_api = "anthropic-messages" },
-        .{ .provider = "xiaomi-token-plan-sgp", .expected_api = "anthropic-messages" },
+        .{ .provider = "xiaomi", .expected_api = "openai-completions" },
+        .{ .provider = "xiaomi-token-plan-cn", .expected_api = "openai-completions" },
+        .{ .provider = "xiaomi-token-plan-ams", .expected_api = "openai-completions" },
+        .{ .provider = "xiaomi-token-plan-sgp", .expected_api = "openai-completions" },
+        .{ .provider = "baseten", .expected_api = "openai-completions" },
+        .{ .provider = "qwen-token-plan", .expected_api = "openai-completions" },
+        .{ .provider = "qwen-token-plan-cn", .expected_api = "openai-completions" },
+        .{ .provider = "qwen-token-plan-individual", .expected_api = "openai-completions" },
     };
 
     for (cases) |case| {

@@ -131,6 +131,10 @@ pub const API_KEY_LOGIN_PROVIDERS = [_]ProviderInfo{
     apiKeyLoginProvider("openai-codex"),
     apiKeyLoginProvider("openai-responses"),
     apiKeyLoginProvider("openrouter"),
+    apiKeyLoginProvider("baseten"),
+    apiKeyLoginProvider("qwen-token-plan"),
+    apiKeyLoginProvider("qwen-token-plan-cn"),
+    apiKeyLoginProvider("qwen-token-plan-individual"),
     apiKeyLoginProvider("together"),
     apiKeyLoginProvider("vercel-ai-gateway"),
     apiKeyLoginProvider("xai"),
@@ -2579,6 +2583,10 @@ test "API key login metadata includes provider catalog parity providers" {
         .{ .provider = "xiaomi-token-plan-cn", .display_name = "Xiaomi MiMo Token Plan (China)" },
         .{ .provider = "xiaomi-token-plan-ams", .display_name = "Xiaomi MiMo Token Plan (Amsterdam)" },
         .{ .provider = "xiaomi-token-plan-sgp", .display_name = "Xiaomi MiMo Token Plan (Singapore)" },
+        .{ .provider = "baseten", .display_name = "Baseten" },
+        .{ .provider = "qwen-token-plan", .display_name = "Qwen Token Plan" },
+        .{ .provider = "qwen-token-plan-cn", .display_name = "Qwen Token Plan CN" },
+        .{ .provider = "qwen-token-plan-individual", .display_name = "Qwen Token Plan Individual" },
     };
 
     const oauth_provider_ids = [_][]const u8{ "anthropic", "github-copilot" };

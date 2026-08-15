@@ -120,7 +120,7 @@ pub const PROVIDERS: []const ProviderInfo = &.{
     .{
         .id = "anthropic",
         .display_name = "Anthropic",
-        .default_model = "claude-opus-4-7",
+        .default_model = "claude-opus-4-8",
         .missing_api_key_message = "Anthropic credentials required.\nSet ANTHROPIC_OAUTH_TOKEN or ANTHROPIC_API_KEY, pass --api-key, or run /login anthropic.",
         .env_vars = &.{ "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY" },
         .default_api = "anthropic-messages",
@@ -133,6 +133,14 @@ pub const PROVIDERS: []const ProviderInfo = &.{
         .missing_api_key_message = "Azure OpenAI credentials required.\nSet AZURE_OPENAI_API_KEY, pass --api-key, or run /login azure-openai-responses to save a key.",
         .env_var = "AZURE_OPENAI_API_KEY",
         .default_api = "azure-openai-responses",
+    },
+    .{
+        .id = "baseten",
+        .display_name = "Baseten",
+        .default_model = "zai-org/GLM-5.2",
+        .missing_api_key_message = "Baseten credentials required.\nSet BASETEN_API_KEY, pass --api-key, or run /login baseten.",
+        .env_var = "BASETEN_API_KEY",
+        .default_api = "openai-completions",
     },
     .{
         .id = "cerebras",
@@ -224,10 +232,8 @@ pub const PROVIDERS: []const ProviderInfo = &.{
     .{
         .id = "kimi-code-openai",
         .display_name = "Kimi Code (OpenAI Compatible)",
-        .default_model = "kimi-for-coding",
         .missing_api_key_message = "Kimi Code (OpenAI Compatible) credentials required.\nSet KIMI_API_KEY, pass --api-key, or run /login kimi-code-openai.",
         .env_var = "KIMI_API_KEY",
-        .default_api = "openai-completions",
         .prefer_initial = "kimi-coding",
     },
     .{
@@ -281,7 +287,7 @@ pub const PROVIDERS: []const ProviderInfo = &.{
     .{
         .id = "nvidia",
         .display_name = "NVIDIA NIM",
-        .default_model = "moonshotai/kimi-k2.6",
+        .default_model = "nvidia/nemotron-3-super-120b-a12b",
         .missing_api_key_message = "NVIDIA NIM credentials required.\nSet NVIDIA_API_KEY, pass --api-key, or run /login nvidia.",
         .env_var = "NVIDIA_API_KEY",
         .default_api = "openai-completions",
@@ -305,7 +311,7 @@ pub const PROVIDERS: []const ProviderInfo = &.{
     .{
         .id = "openai",
         .display_name = "OpenAI",
-        .default_model = "gpt-5.4",
+        .default_model = "gpt-5.5",
         .missing_api_key_message = "OpenAI credentials required.\nSet OPENAI_API_KEY, pass --api-key, or run /login openai to save a key.",
         .env_var = "OPENAI_API_KEY",
         .default_api = "openai-responses",
@@ -335,6 +341,30 @@ pub const PROVIDERS: []const ProviderInfo = &.{
         .default_api = "openai-completions",
     },
     .{
+        .id = "qwen-token-plan",
+        .display_name = "Qwen Token Plan",
+        .default_model = "qwen3.7-max",
+        .missing_api_key_message = "Qwen Token Plan credentials required.\nSet QWEN_TOKEN_PLAN_API_KEY, pass --api-key, or run /login qwen-token-plan.",
+        .env_var = "QWEN_TOKEN_PLAN_API_KEY",
+        .default_api = "openai-completions",
+    },
+    .{
+        .id = "qwen-token-plan-cn",
+        .display_name = "Qwen Token Plan CN",
+        .default_model = "qwen3.7-max",
+        .missing_api_key_message = "Qwen Token Plan CN credentials required.\nSet QWEN_TOKEN_PLAN_CN_API_KEY, pass --api-key, or run /login qwen-token-plan-cn.",
+        .env_var = "QWEN_TOKEN_PLAN_CN_API_KEY",
+        .default_api = "openai-completions",
+    },
+    .{
+        .id = "qwen-token-plan-individual",
+        .display_name = "Qwen Token Plan Individual",
+        .default_model = "qwen3.8-max",
+        .missing_api_key_message = "Qwen Token Plan Individual credentials required.\nSet QWEN_TOKEN_PLAN_API_KEY, pass --api-key, or run /login qwen-token-plan-individual.",
+        .env_var = "QWEN_TOKEN_PLAN_API_KEY",
+        .default_api = "openai-completions",
+    },
+    .{
         .id = "together",
         .display_name = "Together AI",
         .default_model = "moonshotai/Kimi-K2.6",
@@ -353,17 +383,15 @@ pub const PROVIDERS: []const ProviderInfo = &.{
     .{
         .id = "xai",
         .display_name = "xAI",
-        .default_model = "grok-4.20-0309-reasoning",
+        .default_model = "grok-4.5",
         .missing_api_key_message = "xAI credentials required.\nSet XAI_API_KEY, pass --api-key, or run /login xai.",
         .env_var = "XAI_API_KEY",
-        .default_api = "openai-completions",
+        .default_api = "openai-responses",
     },
     .{
         .id = "xai-oauth",
         .display_name = "xAI Grok OAuth",
-        .default_model = "grok-4.3",
         .missing_api_key_message = "xAI Grok OAuth credentials required.\nRun /login xai-oauth for SuperGrok subscription auth.",
-        .default_api = "openai-responses",
         .oauth_default_client_id = "b1a00492-073a-47ea-816f-4c329264a828",
     },
     .{
@@ -372,7 +400,7 @@ pub const PROVIDERS: []const ProviderInfo = &.{
         .default_model = "mimo-v2.5-pro",
         .missing_api_key_message = "Xiaomi MiMo credentials required.\nSet XIAOMI_API_KEY, pass --api-key, or run /login xiaomi.",
         .env_var = "XIAOMI_API_KEY",
-        .default_api = "anthropic-messages",
+        .default_api = "openai-completions",
     },
     .{
         .id = "xiaomi-token-plan-ams",
@@ -380,7 +408,7 @@ pub const PROVIDERS: []const ProviderInfo = &.{
         .default_model = "mimo-v2.5-pro",
         .missing_api_key_message = "Xiaomi MiMo Token Plan (Amsterdam) credentials required.\nSet XIAOMI_TOKEN_PLAN_AMS_API_KEY, pass --api-key, or run /login xiaomi-token-plan-ams.",
         .env_var = "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
-        .default_api = "anthropic-messages",
+        .default_api = "openai-completions",
     },
     .{
         .id = "xiaomi-token-plan-cn",
@@ -388,7 +416,7 @@ pub const PROVIDERS: []const ProviderInfo = &.{
         .default_model = "mimo-v2.5-pro",
         .missing_api_key_message = "Xiaomi MiMo Token Plan (China) credentials required.\nSet XIAOMI_TOKEN_PLAN_CN_API_KEY, pass --api-key, or run /login xiaomi-token-plan-cn.",
         .env_var = "XIAOMI_TOKEN_PLAN_CN_API_KEY",
-        .default_api = "anthropic-messages",
+        .default_api = "openai-completions",
     },
     .{
         .id = "xiaomi-token-plan-sgp",
@@ -396,12 +424,12 @@ pub const PROVIDERS: []const ProviderInfo = &.{
         .default_model = "mimo-v2.5-pro",
         .missing_api_key_message = "Xiaomi MiMo Token Plan (Singapore) credentials required.\nSet XIAOMI_TOKEN_PLAN_SGP_API_KEY, pass --api-key, or run /login xiaomi-token-plan-sgp.",
         .env_var = "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
-        .default_api = "anthropic-messages",
+        .default_api = "openai-completions",
     },
     .{
         .id = "zai",
         .display_name = "ZAI",
-        .default_model = "glm-4.7",
+        .default_model = "glm-5.3",
         .missing_api_key_message = "ZAI credentials required.\nSet ZAI_API_KEY, pass --api-key, or run /login zai.",
         .env_var = "ZAI_API_KEY",
         .default_api = "openai-completions",
@@ -409,7 +437,7 @@ pub const PROVIDERS: []const ProviderInfo = &.{
     .{
         .id = "zai-coding-cn",
         .display_name = "ZAI Coding Plan (China)",
-        .default_model = "glm-5.2",
+        .default_model = "glm-5.3",
         .missing_api_key_message = "ZAI Coding Plan (China) credentials required.\nSet ZAI_CODING_CN_API_KEY, pass --api-key, or run /login zai-coding-cn.",
         .env_var = "ZAI_CODING_CN_API_KEY",
         .default_api = "openai-completions",
@@ -609,7 +637,7 @@ test "providerInfoFor returns canonical row for a known provider" {
     const info = providerInfoFor("openai").?;
     try std.testing.expectEqualStrings("openai", info.id);
     try std.testing.expectEqualStrings("OpenAI", info.display_name.?);
-    try std.testing.expectEqualStrings("gpt-5.4", info.default_model.?);
+    try std.testing.expectEqualStrings("gpt-5.5", info.default_model.?);
     try std.testing.expect(std.mem.indexOf(u8, info.missing_api_key_message.?, "OPENAI_API_KEY") != null);
     try std.testing.expectEqualStrings("OPENAI_API_KEY", info.env_var.?);
 }

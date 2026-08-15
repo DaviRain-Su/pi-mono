@@ -698,8 +698,8 @@ test "resolveProviderConfig uses canonical defaults from model registry" {
     defer resolved.deinit(allocator);
 
     try std.testing.expectEqualStrings("openai-key", resolved.api_key.?);
-    try std.testing.expectEqualStrings("gpt-5.4", resolved.model.id);
-    try std.testing.expectEqualStrings("GPT-5.4", resolved.model.name);
+    try std.testing.expectEqualStrings("gpt-5.5", resolved.model.id);
+    try std.testing.expectEqualStrings("GPT-5.5", resolved.model.name);
     try std.testing.expectEqualStrings("openai-responses", resolved.model.api);
     try std.testing.expectEqualStrings("https://api.openai.com/v1", resolved.model.base_url);
     try std.testing.expectEqual(@as(u32, 272000), resolved.model.context_window);
@@ -717,7 +717,7 @@ test "resolveProviderConfig owns model strings across registry reload" {
 
     try env_map.put("OPENAI_API_KEY", "openai-key");
 
-    const registry_model = ai.model_registry.find("openai", "gpt-5.4").?;
+    const registry_model = ai.model_registry.find("openai", "gpt-5.5").?;
     var resolved = try resolveProviderConfig(allocator, std.testing.io, &env_map, "openai", null, null, null);
     defer resolved.deinit(allocator);
 
@@ -732,7 +732,7 @@ test "resolveProviderConfig owns model strings across registry reload" {
     ai.model_registry.clearDefault();
 
     try std.testing.expectEqualStrings("openai", resolved.model.provider);
-    try std.testing.expectEqualStrings("gpt-5.4", resolved.model.id);
+    try std.testing.expectEqualStrings("gpt-5.5", resolved.model.id);
     try std.testing.expectEqualStrings("OpenAI", providerDisplayName(resolved.model.provider));
 }
 
@@ -805,6 +805,9 @@ test "resolveProviderConfig accepts provider catalog parity providers" {
     try env_map.put("XIAOMI_TOKEN_PLAN_CN_API_KEY", "xiaomi-cn-key");
     try env_map.put("XIAOMI_TOKEN_PLAN_AMS_API_KEY", "xiaomi-ams-key");
     try env_map.put("XIAOMI_TOKEN_PLAN_SGP_API_KEY", "xiaomi-sgp-key");
+    try env_map.put("BASETEN_API_KEY", "baseten-key");
+    try env_map.put("QWEN_TOKEN_PLAN_API_KEY", "qwen-key");
+    try env_map.put("QWEN_TOKEN_PLAN_CN_API_KEY", "qwen-cn-key");
 
     const cases = [_]struct {
         provider: []const u8,
@@ -816,16 +819,19 @@ test "resolveProviderConfig accepts provider catalog parity providers" {
     }{
         .{ .provider = "moonshotai", .expected_key = "moonshot-key", .model_id = "kimi-k2.6", .api = "openai-completions", .base_url = "https://api.moonshot.ai/v1", .display_name = "Moonshot AI" },
         .{ .provider = "moonshotai-cn", .expected_key = "moonshot-key", .model_id = "kimi-k2.6", .api = "openai-completions", .base_url = "https://api.moonshot.cn/v1", .display_name = "Moonshot AI (China)" },
-        .{ .provider = "kimi-code-openai", .expected_key = "kimi-key", .model_id = "kimi-for-coding", .api = "openai-completions", .base_url = "https://api.kimi.com/coding/v1", .display_name = "Kimi Code (OpenAI Compatible)" },
         .{ .provider = "deepseek", .expected_key = "deepseek-key", .model_id = "deepseek-v4-pro", .api = "openai-completions", .base_url = "https://api.deepseek.com", .display_name = "DeepSeek" },
-        .{ .provider = "zai", .expected_key = "zai-key", .model_id = "glm-4.7", .api = "openai-completions", .base_url = "https://open.bigmodel.cn/api/coding/paas/v4", .display_name = "ZAI" },
+        .{ .provider = "zai", .expected_key = "zai-key", .model_id = "glm-5.3", .api = "openai-completions", .base_url = "https://api.z.ai/api/coding/paas/v4", .display_name = "ZAI" },
         .{ .provider = "cloudflare-workers-ai", .expected_key = "cloudflare-key", .model_id = "@cf/moonshotai/kimi-k2.6", .api = "openai-completions", .base_url = "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1", .display_name = "Cloudflare Workers AI" },
         .{ .provider = "cloudflare-ai-gateway", .expected_key = "cloudflare-key", .model_id = "workers-ai/@cf/moonshotai/kimi-k2.6", .api = "openai-completions", .base_url = "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat", .display_name = "Cloudflare AI Gateway" },
         .{ .provider = "together", .expected_key = "together-key", .model_id = "moonshotai/Kimi-K2.6", .api = "openai-completions", .base_url = "https://api.together.ai/v1", .display_name = "Together AI" },
-        .{ .provider = "xiaomi", .expected_key = "xiaomi-key", .model_id = "mimo-v2.5-pro", .api = "anthropic-messages", .base_url = "https://api.xiaomimimo.com/anthropic", .display_name = "Xiaomi MiMo" },
-        .{ .provider = "xiaomi-token-plan-cn", .expected_key = "xiaomi-cn-key", .model_id = "mimo-v2.5-pro", .api = "anthropic-messages", .base_url = "https://token-plan-cn.xiaomimimo.com/anthropic", .display_name = "Xiaomi MiMo Token Plan (China)" },
-        .{ .provider = "xiaomi-token-plan-ams", .expected_key = "xiaomi-ams-key", .model_id = "mimo-v2.5-pro", .api = "anthropic-messages", .base_url = "https://token-plan-ams.xiaomimimo.com/anthropic", .display_name = "Xiaomi MiMo Token Plan (Amsterdam)" },
-        .{ .provider = "xiaomi-token-plan-sgp", .expected_key = "xiaomi-sgp-key", .model_id = "mimo-v2.5-pro", .api = "anthropic-messages", .base_url = "https://token-plan-sgp.xiaomimimo.com/anthropic", .display_name = "Xiaomi MiMo Token Plan (Singapore)" },
+        .{ .provider = "xiaomi", .expected_key = "xiaomi-key", .model_id = "mimo-v2.5-pro", .api = "openai-completions", .base_url = "https://api.xiaomimimo.com/v1", .display_name = "Xiaomi MiMo" },
+        .{ .provider = "xiaomi-token-plan-cn", .expected_key = "xiaomi-cn-key", .model_id = "mimo-v2.5-pro", .api = "openai-completions", .base_url = "https://token-plan-cn.xiaomimimo.com/v1", .display_name = "Xiaomi MiMo Token Plan (China)" },
+        .{ .provider = "xiaomi-token-plan-ams", .expected_key = "xiaomi-ams-key", .model_id = "mimo-v2.5-pro", .api = "openai-completions", .base_url = "https://token-plan-ams.xiaomimimo.com/v1", .display_name = "Xiaomi MiMo Token Plan (Amsterdam)" },
+        .{ .provider = "xiaomi-token-plan-sgp", .expected_key = "xiaomi-sgp-key", .model_id = "mimo-v2.5-pro", .api = "openai-completions", .base_url = "https://token-plan-sgp.xiaomimimo.com/v1", .display_name = "Xiaomi MiMo Token Plan (Singapore)" },
+        .{ .provider = "baseten", .expected_key = "baseten-key", .model_id = "zai-org/GLM-5.2", .api = "openai-completions", .base_url = "https://inference.baseten.co/v1", .display_name = "Baseten" },
+        .{ .provider = "qwen-token-plan", .expected_key = "qwen-key", .model_id = "qwen3.7-max", .api = "openai-completions", .base_url = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", .display_name = "Qwen Token Plan" },
+        .{ .provider = "qwen-token-plan-cn", .expected_key = "qwen-cn-key", .model_id = "qwen3.7-max", .api = "openai-completions", .base_url = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", .display_name = "Qwen Token Plan CN" },
+        .{ .provider = "qwen-token-plan-individual", .expected_key = "qwen-key", .model_id = "qwen3.8-max", .api = "openai-completions", .base_url = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", .display_name = "Qwen Token Plan Individual" },
     };
 
     for (cases) |case| {
@@ -853,15 +859,7 @@ test "resolveProviderConfig uses configured api key when env is missing" {
 
     try std.testing.expectEqualStrings("configured-openai-key", resolved.api_key.?);
     try std.testing.expectEqual(ProviderAuthStatus.stored, resolved.auth_status);
-    try std.testing.expectEqualStrings("gpt-5.4", resolved.model.id);
-
-    var xai_oauth = try resolveProviderConfig(allocator, std.testing.io, &env_map, "xai-oauth", null, null, "stored-xai-oauth-token");
-    defer xai_oauth.deinit(allocator);
-
-    try std.testing.expectEqualStrings("stored-xai-oauth-token", xai_oauth.api_key.?);
-    try std.testing.expectEqual(ProviderAuthStatus.stored, xai_oauth.auth_status);
-    try std.testing.expectEqualStrings("grok-4.3", xai_oauth.model.id);
-    try std.testing.expectEqualStrings("openai-responses", xai_oauth.model.api);
+    try std.testing.expectEqualStrings("gpt-5.5", resolved.model.id);
 }
 
 test "resolveProviderConfigAllowMissingCredentials returns safe missing auth state" {
@@ -876,7 +874,7 @@ test "resolveProviderConfigAllowMissingCredentials returns safe missing auth sta
     try std.testing.expectEqual(@as(?[]const u8, null), resolved.api_key);
     try std.testing.expectEqual(ProviderAuthStatus.missing, resolved.auth_status);
     try std.testing.expectEqualStrings("openai", resolved.model.provider);
-    try std.testing.expectEqualStrings("gpt-5.4", resolved.model.id);
+    try std.testing.expectEqualStrings("gpt-5.5", resolved.model.id);
 }
 
 test "resolveProviderConfig prefers runtime override over stored and environment credentials" {
@@ -899,7 +897,7 @@ test "resolveProviderConfig prefers runtime override over stored and environment
 
     try std.testing.expectEqual(ProviderAuthStatus.runtime, resolved.auth_status);
     try std.testing.expectEqualStrings("runtime-openai-key", resolved.api_key.?);
-    try std.testing.expectEqualStrings("gpt-5.4", resolved.model.id);
+    try std.testing.expectEqualStrings("gpt-5.5", resolved.model.id);
 }
 
 test "resolveProviderConfig can force faux responses for built-in providers" {
@@ -918,7 +916,7 @@ test "resolveProviderConfig can force faux responses for built-in providers" {
     try std.testing.expect(resolved.faux_registration != null);
     try std.testing.expectEqualStrings("openai", resolved.model.provider);
     try std.testing.expectEqualStrings("openai-responses", resolved.model.api);
-    try std.testing.expectEqualStrings("gpt-5.4", resolved.model.id);
+    try std.testing.expectEqualStrings("gpt-5.5", resolved.model.id);
 }
 
 test "resolveProviderConfig applies faux context window overrides" {
@@ -935,7 +933,7 @@ test "resolveProviderConfig applies faux context window overrides" {
     defer resolved.deinit(allocator);
 
     try std.testing.expectEqualStrings("anthropic", resolved.model.provider);
-    try std.testing.expectEqualStrings("claude-opus-4-7", resolved.model.id);
+    try std.testing.expectEqualStrings("claude-opus-4-8", resolved.model.id);
     try std.testing.expectEqual(@as(u32, 48), resolved.model.context_window);
 }
 
@@ -956,7 +954,6 @@ test "listAvailableModels enumerates all built-in providers" {
     var found_groq = false;
     var found_cerebras = false;
     var found_xai = false;
-    var found_xai_oauth = false;
     var found_fireworks = false;
     var found_huggingface = false;
     var found_openrouter = false;
@@ -991,13 +988,6 @@ test "listAvailableModels enumerates all built-in providers" {
             found_cerebras = true;
         } else if (std.mem.eql(u8, entry.provider, "xai")) {
             found_xai = true;
-        } else if (std.mem.eql(u8, entry.provider, "xai-oauth")) {
-            found_xai_oauth = true;
-            if (std.mem.eql(u8, entry.model_id, "grok-4.3")) {
-                try std.testing.expect(!entry.available);
-                try std.testing.expect(entry.supports_images);
-                try std.testing.expect(entry.reasoning);
-            }
         } else if (std.mem.eql(u8, entry.provider, "fireworks")) {
             found_fireworks = true;
         } else if (std.mem.eql(u8, entry.provider, "huggingface")) {
@@ -1020,7 +1010,6 @@ test "listAvailableModels enumerates all built-in providers" {
     try std.testing.expect(found_groq);
     try std.testing.expect(found_cerebras);
     try std.testing.expect(found_xai);
-    try std.testing.expect(found_xai_oauth);
     try std.testing.expect(found_fireworks);
     try std.testing.expect(found_huggingface);
     try std.testing.expect(found_openrouter);
@@ -1039,7 +1028,6 @@ test "listAvailableModels surfaces provider catalog parity auth states" {
     }{
         .{ .provider = "moonshotai", .model_id = "kimi-k2.6", .env_var = "MOONSHOT_API_KEY" },
         .{ .provider = "moonshotai-cn", .model_id = "kimi-k2.6", .env_var = "MOONSHOT_API_KEY" },
-        .{ .provider = "kimi-code-openai", .model_id = "kimi-for-coding", .env_var = "KIMI_API_KEY" },
         .{ .provider = "deepseek", .model_id = "deepseek-v4-pro", .env_var = "DEEPSEEK_API_KEY" },
         .{ .provider = "zai", .model_id = "glm-4.7", .env_var = "ZAI_API_KEY" },
         .{ .provider = "cloudflare-workers-ai", .model_id = "@cf/moonshotai/kimi-k2.6", .env_var = "CLOUDFLARE_API_KEY" },
@@ -1049,6 +1037,10 @@ test "listAvailableModels surfaces provider catalog parity auth states" {
         .{ .provider = "xiaomi-token-plan-cn", .model_id = "mimo-v2.5-pro", .env_var = "XIAOMI_TOKEN_PLAN_CN_API_KEY" },
         .{ .provider = "xiaomi-token-plan-ams", .model_id = "mimo-v2.5-pro", .env_var = "XIAOMI_TOKEN_PLAN_AMS_API_KEY" },
         .{ .provider = "xiaomi-token-plan-sgp", .model_id = "mimo-v2.5-pro", .env_var = "XIAOMI_TOKEN_PLAN_SGP_API_KEY" },
+        .{ .provider = "baseten", .model_id = "zai-org/GLM-5.2", .env_var = "BASETEN_API_KEY" },
+        .{ .provider = "qwen-token-plan", .model_id = "qwen3.7-max", .env_var = "QWEN_TOKEN_PLAN_API_KEY" },
+        .{ .provider = "qwen-token-plan-cn", .model_id = "qwen3.7-max", .env_var = "QWEN_TOKEN_PLAN_CN_API_KEY" },
+        .{ .provider = "qwen-token-plan-individual", .model_id = "qwen3.8-max", .env_var = "QWEN_TOKEN_PLAN_API_KEY" },
     };
 
     var env_map_all = std.process.Environ.Map.init(allocator);
@@ -1132,7 +1124,6 @@ test "KIMI_API_KEY configures Kimi Code providers without legacy Kimi" {
 
     var saw_kimi = false;
     var saw_kimi_coding = false;
-    var saw_kimi_code_openai = false;
     for (models) |entry| {
         if (std.mem.eql(u8, entry.provider, "kimi") and std.mem.eql(u8, entry.model_id, "kimi-k2.6")) {
             saw_kimi = true;
@@ -1142,33 +1133,23 @@ test "KIMI_API_KEY configures Kimi Code providers without legacy Kimi" {
             saw_kimi_coding = true;
             try std.testing.expect(entry.available);
         }
-        if (std.mem.eql(u8, entry.provider, "kimi-code-openai") and std.mem.eql(u8, entry.model_id, "kimi-for-coding")) {
-            saw_kimi_code_openai = true;
-            try std.testing.expect(entry.available);
-        }
+        try std.testing.expect(!std.mem.eql(u8, entry.provider, "kimi-code-openai"));
     }
 
     try std.testing.expect(saw_kimi);
     try std.testing.expect(saw_kimi_coding);
-    try std.testing.expect(saw_kimi_code_openai);
 
     const configured = try filterConfiguredModels(allocator, models);
     defer allocator.free(configured);
-    try std.testing.expectEqual(@as(usize, 2), configured.len);
+    try std.testing.expectEqual(@as(usize, 4), configured.len);
     var configured_kimi_coding = false;
-    var configured_kimi_code_openai = false;
     for (configured) |entry| {
         if (std.mem.eql(u8, entry.provider, "kimi-coding")) {
             configured_kimi_coding = true;
-            try std.testing.expectEqualStrings("kimi-for-coding", entry.model_id);
         }
-        if (std.mem.eql(u8, entry.provider, "kimi-code-openai")) {
-            configured_kimi_code_openai = true;
-            try std.testing.expectEqualStrings("kimi-for-coding", entry.model_id);
-        }
+        try std.testing.expect(!std.mem.eql(u8, entry.provider, "kimi-code-openai"));
     }
     try std.testing.expect(configured_kimi_coding);
-    try std.testing.expect(configured_kimi_code_openai);
 
     const model = (try findInitialDefaultModel(allocator, &env_map, .{})).?;
     try std.testing.expectEqualStrings("kimi-coding", model.provider);

@@ -155,6 +155,10 @@ test "resolveEnvVar returns previously-known single-key mappings" {
         .{ .provider = "xiaomi-token-plan-cn", .env_var = "XIAOMI_TOKEN_PLAN_CN_API_KEY" },
         .{ .provider = "xiaomi-token-plan-ams", .env_var = "XIAOMI_TOKEN_PLAN_AMS_API_KEY" },
         .{ .provider = "xiaomi-token-plan-sgp", .env_var = "XIAOMI_TOKEN_PLAN_SGP_API_KEY" },
+        .{ .provider = "baseten", .env_var = "BASETEN_API_KEY" },
+        .{ .provider = "qwen-token-plan", .env_var = "QWEN_TOKEN_PLAN_API_KEY" },
+        .{ .provider = "qwen-token-plan-cn", .env_var = "QWEN_TOKEN_PLAN_CN_API_KEY" },
+        .{ .provider = "qwen-token-plan-individual", .env_var = "QWEN_TOKEN_PLAN_API_KEY" },
     };
 
     for (known) |entry| {
@@ -213,6 +217,9 @@ test "getEnvApiKey resolves known providers and returns null when missing" {
     try env_map.put("XIAOMI_TOKEN_PLAN_CN_API_KEY", "xiaomi-cn-key");
     try env_map.put("XIAOMI_TOKEN_PLAN_AMS_API_KEY", "xiaomi-ams-key");
     try env_map.put("XIAOMI_TOKEN_PLAN_SGP_API_KEY", "xiaomi-sgp-key");
+    try env_map.put("BASETEN_API_KEY", "baseten-key");
+    try env_map.put("QWEN_TOKEN_PLAN_API_KEY", "qwen-key");
+    try env_map.put("QWEN_TOKEN_PLAN_CN_API_KEY", "qwen-cn-key");
     try env_map.put("COPILOT_GITHUB_TOKEN", "copilot-token");
     try env_map.put("GH_TOKEN", "gh-token");
     try env_map.put("GITHUB_TOKEN", "github-token");
@@ -258,6 +265,10 @@ test "getEnvApiKey resolves known providers and returns null when missing" {
         .{ .provider = "xiaomi-token-plan-cn", .expected = "xiaomi-cn-key" },
         .{ .provider = "xiaomi-token-plan-ams", .expected = "xiaomi-ams-key" },
         .{ .provider = "xiaomi-token-plan-sgp", .expected = "xiaomi-sgp-key" },
+        .{ .provider = "baseten", .expected = "baseten-key" },
+        .{ .provider = "qwen-token-plan", .expected = "qwen-key" },
+        .{ .provider = "qwen-token-plan-cn", .expected = "qwen-cn-key" },
+        .{ .provider = "qwen-token-plan-individual", .expected = "qwen-key" },
         .{ .provider = "github-copilot", .expected = "copilot-token" },
         .{ .provider = "anthropic", .expected = "anthropic-oauth-token" },
         .{ .provider = "amazon-bedrock", .expected = AUTHENTICATED_SENTINEL },

@@ -899,7 +899,6 @@ test "built-in models are registered at startup" {
     try std.testing.expect(find("together", "moonshotai/Kimi-K2.6") != null);
     try std.testing.expect(find("opencode-go", "kimi-k2.6") != null);
     try std.testing.expect(find("kimi-coding", "kimi-for-coding") != null);
-    try std.testing.expect(find("kimi-code-openai", "kimi-for-coding") != null);
     try std.testing.expect(find("deepseek", "deepseek-v4-pro") != null);
     try std.testing.expect(find("zai", "glm-4.7") != null);
     try std.testing.expect(find("moonshotai", "kimi-k2.6") != null);
@@ -910,12 +909,15 @@ test "built-in models are registered at startup" {
     try std.testing.expect(find("xiaomi-token-plan-cn", "mimo-v2.5-pro") != null);
     try std.testing.expect(find("xiaomi-token-plan-ams", "mimo-v2.5-pro") != null);
     try std.testing.expect(find("xiaomi-token-plan-sgp", "mimo-v2.5-pro") != null);
-    try std.testing.expect(find("xai-oauth", "grok-4.3") != null);
+    try std.testing.expect(find("baseten", "zai-org/GLM-5.2") != null);
+    try std.testing.expect(find("qwen-token-plan", "qwen3.7-max") != null);
+    try std.testing.expect(find("qwen-token-plan-cn", "qwen3.7-max") != null);
+    try std.testing.expect(find("qwen-token-plan-individual", "qwen3.8-max") != null);
 
     const provider = getProviderConfig("openai").?;
     try std.testing.expectEqualStrings("openai-responses", provider.api);
     try std.testing.expectEqualStrings("https://api.openai.com/v1", provider.base_url);
-    try std.testing.expectEqualStrings("gpt-5.4", provider.default_model_id.?);
+    try std.testing.expectEqualStrings("gpt-5.5", provider.default_model_id.?);
 
     const copilot_provider = getProviderConfig("github-copilot").?;
     try std.testing.expectEqualStrings("openai-responses", copilot_provider.api);
@@ -968,28 +970,26 @@ test "phase4 provider expansion registers configs and default models" {
         base_url: []const u8,
         default_model_id: []const u8,
     }{
-        .{ .provider = "xai", .api = "openai-completions", .base_url = "https://api.x.ai/v1", .default_model_id = "grok-4.20-0309-reasoning" },
-        .{ .provider = "xai-oauth", .api = "openai-responses", .base_url = "https://api.x.ai/v1", .default_model_id = "grok-4.3" },
+        .{ .provider = "xai", .api = "openai-responses", .base_url = "https://api.x.ai/v1", .default_model_id = "grok-4.5" },
         .{ .provider = "groq", .api = "openai-completions", .base_url = "https://api.groq.com/openai/v1", .default_model_id = "openai/gpt-oss-120b" },
         .{ .provider = "cerebras", .api = "openai-completions", .base_url = "https://api.cerebras.ai/v1", .default_model_id = "zai-glm-4.7" },
         .{ .provider = "openrouter", .api = "openai-completions", .base_url = "https://openrouter.ai/api/v1", .default_model_id = "moonshotai/kimi-k2.6" },
         .{ .provider = "vercel-ai-gateway", .api = "anthropic-messages", .base_url = "https://ai-gateway.vercel.sh", .default_model_id = "zai/glm-5.1" },
-        .{ .provider = "zai", .api = "openai-completions", .base_url = "https://open.bigmodel.cn/api/coding/paas/v4", .default_model_id = "glm-4.7" },
+        .{ .provider = "zai", .api = "openai-completions", .base_url = "https://api.z.ai/api/coding/paas/v4", .default_model_id = "glm-5.3" },
         .{ .provider = "minimax", .api = "anthropic-messages", .base_url = "https://api.minimax.io/anthropic", .default_model_id = "MiniMax-M2.7" },
         .{ .provider = "huggingface", .api = "openai-completions", .base_url = "https://router.huggingface.co/v1", .default_model_id = "moonshotai/Kimi-K2.6" },
         .{ .provider = "fireworks", .api = "anthropic-messages", .base_url = "https://api.fireworks.ai/inference", .default_model_id = "accounts/fireworks/models/kimi-k2p6" },
         .{ .provider = "together", .api = "openai-completions", .base_url = "https://api.together.ai/v1", .default_model_id = "moonshotai/Kimi-K2.6" },
         .{ .provider = "opencode", .api = "openai-completions", .base_url = "https://opencode.ai/zen/v1", .default_model_id = "kimi-k2.6" },
-        .{ .provider = "kimi-code-openai", .api = "openai-completions", .base_url = "https://api.kimi.com/coding/v1", .default_model_id = "kimi-for-coding" },
         .{ .provider = "deepseek", .api = "openai-completions", .base_url = "https://api.deepseek.com", .default_model_id = "deepseek-v4-pro" },
         .{ .provider = "moonshotai", .api = "openai-completions", .base_url = "https://api.moonshot.ai/v1", .default_model_id = "kimi-k2.6" },
         .{ .provider = "moonshotai-cn", .api = "openai-completions", .base_url = "https://api.moonshot.cn/v1", .default_model_id = "kimi-k2.6" },
         .{ .provider = "cloudflare-workers-ai", .api = "openai-completions", .base_url = "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1", .default_model_id = "@cf/moonshotai/kimi-k2.6" },
         .{ .provider = "cloudflare-ai-gateway", .api = "openai-completions", .base_url = "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat", .default_model_id = "workers-ai/@cf/moonshotai/kimi-k2.6" },
-        .{ .provider = "xiaomi", .api = "anthropic-messages", .base_url = "https://api.xiaomimimo.com/anthropic", .default_model_id = "mimo-v2.5-pro" },
-        .{ .provider = "xiaomi-token-plan-cn", .api = "anthropic-messages", .base_url = "https://token-plan-cn.xiaomimimo.com/anthropic", .default_model_id = "mimo-v2.5-pro" },
-        .{ .provider = "xiaomi-token-plan-ams", .api = "anthropic-messages", .base_url = "https://token-plan-ams.xiaomimimo.com/anthropic", .default_model_id = "mimo-v2.5-pro" },
-        .{ .provider = "xiaomi-token-plan-sgp", .api = "anthropic-messages", .base_url = "https://token-plan-sgp.xiaomimimo.com/anthropic", .default_model_id = "mimo-v2.5-pro" },
+        .{ .provider = "xiaomi", .api = "openai-completions", .base_url = "https://api.xiaomimimo.com/v1", .default_model_id = "mimo-v2.5-pro" },
+        .{ .provider = "xiaomi-token-plan-cn", .api = "openai-completions", .base_url = "https://token-plan-cn.xiaomimimo.com/v1", .default_model_id = "mimo-v2.5-pro" },
+        .{ .provider = "xiaomi-token-plan-ams", .api = "openai-completions", .base_url = "https://token-plan-ams.xiaomimimo.com/v1", .default_model_id = "mimo-v2.5-pro" },
+        .{ .provider = "xiaomi-token-plan-sgp", .api = "openai-completions", .base_url = "https://token-plan-sgp.xiaomimimo.com/v1", .default_model_id = "mimo-v2.5-pro" },
     };
 
     for (cases) |case| {
@@ -1013,17 +1013,6 @@ test "phase4 provider expansion registers configs and default models" {
         try expectCompatBool(model, "supportsStrictMode", false);
     }
 
-    const kimi_code_openai = find("kimi-code-openai", "kimi-for-coding").?;
-    try expectCompatBool(kimi_code_openai, "supportsStore", false);
-    try expectCompatBool(kimi_code_openai, "supportsDeveloperRole", false);
-    try expectCompatBool(kimi_code_openai, "supportsReasoningEffort", false);
-    try expectCompatString(kimi_code_openai, "maxTokensField", "max_tokens");
-    try expectCompatBool(kimi_code_openai, "supportsStrictMode", false);
-
-    const xai_oauth = find("xai-oauth", "grok-4.3").?;
-    try expectCompatBool(xai_oauth, "sendSessionIdHeader", false);
-    try expectCompatBool(xai_oauth, "supportsLongCacheRetention", false);
-
     const together = find("together", "moonshotai/Kimi-K2.6").?;
     try std.testing.expectEqualStrings("Kimi K2.6", together.name);
     try std.testing.expect(together.reasoning);
@@ -1046,8 +1035,8 @@ test "zai CodePlan built-ins mirror TypeScript generated metadata" {
 
     const provider = getProviderConfig("zai").?;
     try std.testing.expectEqualStrings("openai-completions", provider.api);
-    try std.testing.expectEqualStrings("https://open.bigmodel.cn/api/coding/paas/v4", provider.base_url);
-    try std.testing.expectEqualStrings("glm-4.7", provider.default_model_id.?);
+    try std.testing.expectEqualStrings("https://api.z.ai/api/coding/paas/v4", provider.base_url);
+    try std.testing.expectEqualStrings("glm-5.3", provider.default_model_id.?);
 
     const cases = [_]struct {
         id: []const u8,
@@ -1057,18 +1046,18 @@ test "zai CodePlan built-ins mirror TypeScript generated metadata" {
         supports_images: bool,
         zai_tool_stream: bool,
     }{
-        .{ .id = "glm-4.5-air", .name = "GLM-4.5-Air", .context_window = 131072, .max_tokens = 98304, .supports_images = false, .zai_tool_stream = false },
         .{ .id = "glm-4.7", .name = "GLM-4.7", .context_window = 204800, .max_tokens = 131072, .supports_images = false, .zai_tool_stream = true },
         .{ .id = "glm-5-turbo", .name = "GLM-5-Turbo", .context_window = 200000, .max_tokens = 131072, .supports_images = false, .zai_tool_stream = true },
-        .{ .id = "glm-5.1", .name = "GLM-5.1", .context_window = 200000, .max_tokens = 131072, .supports_images = false, .zai_tool_stream = true },
-        .{ .id = "glm-5v-turbo", .name = "GLM-5V-Turbo", .context_window = 200000, .max_tokens = 131072, .supports_images = true, .zai_tool_stream = true },
+        .{ .id = "glm-5.2", .name = "GLM-5.2", .context_window = 1000000, .max_tokens = 131072, .supports_images = false, .zai_tool_stream = true },
+        .{ .id = "glm-5.2-highspeed", .name = "GLM-5.2 Highspeed", .context_window = 1000000, .max_tokens = 131072, .supports_images = false, .zai_tool_stream = true },
+        .{ .id = "glm-5.3", .name = "GLM-5.3", .context_window = 1000000, .max_tokens = 131072, .supports_images = false, .zai_tool_stream = true },
     };
 
     for (cases) |case| {
         const model = find("zai", case.id).?;
         try std.testing.expectEqualStrings(case.name, model.name);
         try std.testing.expectEqualStrings("openai-completions", model.api);
-        try std.testing.expectEqualStrings("https://open.bigmodel.cn/api/coding/paas/v4", model.base_url);
+        try std.testing.expectEqualStrings("https://api.z.ai/api/coding/paas/v4", model.base_url);
         try std.testing.expect(model.reasoning);
         try std.testing.expectEqual(case.context_window, model.context_window);
         try std.testing.expectEqual(case.max_tokens, model.max_tokens);
@@ -1102,9 +1091,10 @@ test "DeepSeek built-ins mirror TypeScript generated metadata" {
         input_cost: f64,
         output_cost: f64,
         cache_read_cost: f64,
+        supports_low: bool,
     }{
-        .{ .id = "deepseek-v4-flash", .name = "DeepSeek V4 Flash", .input_cost = 0.14, .output_cost = 0.28, .cache_read_cost = 0.0028 },
-        .{ .id = "deepseek-v4-pro", .name = "DeepSeek V4 Pro", .input_cost = 0.435, .output_cost = 0.87, .cache_read_cost = 0.003625 },
+        .{ .id = "deepseek-v4-flash", .name = "DeepSeek V4 Flash", .input_cost = 0.14, .output_cost = 0.28, .cache_read_cost = 0.0028, .supports_low = true },
+        .{ .id = "deepseek-v4-pro", .name = "DeepSeek V4 Pro", .input_cost = 0.435, .output_cost = 0.87, .cache_read_cost = 0.003625, .supports_low = false },
     };
 
     for (cases) |case| {
@@ -1124,7 +1114,7 @@ test "DeepSeek built-ins mirror TypeScript generated metadata" {
         try expectCompatBool(model, "requiresReasoningContentOnAssistantMessages", true);
         try expectCompatString(model, "thinkingFormat", "deepseek");
         try std.testing.expect(!thinkingLevelSupported(model, .minimal));
-        try std.testing.expect(!thinkingLevelSupported(model, .low));
+        try std.testing.expectEqual(case.supports_low, thinkingLevelSupported(model, .low));
         try std.testing.expect(!thinkingLevelSupported(model, .medium));
         try std.testing.expect(thinkingLevelSupported(model, .high));
         try std.testing.expect(thinkingLevelSupported(model, .xhigh));
@@ -1134,6 +1124,23 @@ test "DeepSeek built-ins mirror TypeScript generated metadata" {
 
     try std.testing.expect(find("deepseek", "deepseek-reasoner") == null);
     try std.testing.expect(find("deepseek", "deepseek-chat") == null);
+}
+
+test "Baseten and Qwen Token Plan catalogs register defaults and thinking compat" {
+    resetForTesting();
+    defer resetForTesting();
+
+    const baseten = find("baseten", "zai-org/GLM-5.2").?;
+    try expectCompatString(baseten, "thinkingFormat", "baseten");
+    try expectCompatBool(baseten, "supportsReasoningEffort", true);
+
+    const qwen = find("qwen-token-plan", "qwen3.7-max").?;
+    try expectCompatString(qwen, "thinkingFormat", "qwen");
+    try expectCompatBool(qwen, "supportsReasoningEffort", false);
+
+    const individual = find("qwen-token-plan-individual", "qwen3.8-max").?;
+    try expectCompatString(individual, "thinkingFormat", "qwen");
+    try expectCompatBool(individual, "supportsReasoningEffort", true);
 }
 
 test "provider catalog config parity registers Moonshot Cloudflare and Xiaomi providers" {
@@ -1150,10 +1157,10 @@ test "provider catalog config parity registers Moonshot Cloudflare and Xiaomi pr
         .{ .provider = "moonshotai-cn", .api = "openai-completions", .base_url = "https://api.moonshot.cn/v1", .default_model_id = "kimi-k2.6" },
         .{ .provider = "cloudflare-workers-ai", .api = "openai-completions", .base_url = "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1", .default_model_id = "@cf/moonshotai/kimi-k2.6" },
         .{ .provider = "cloudflare-ai-gateway", .api = "openai-completions", .base_url = "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat", .default_model_id = "workers-ai/@cf/moonshotai/kimi-k2.6" },
-        .{ .provider = "xiaomi", .api = "anthropic-messages", .base_url = "https://api.xiaomimimo.com/anthropic", .default_model_id = "mimo-v2.5-pro" },
-        .{ .provider = "xiaomi-token-plan-cn", .api = "anthropic-messages", .base_url = "https://token-plan-cn.xiaomimimo.com/anthropic", .default_model_id = "mimo-v2.5-pro" },
-        .{ .provider = "xiaomi-token-plan-ams", .api = "anthropic-messages", .base_url = "https://token-plan-ams.xiaomimimo.com/anthropic", .default_model_id = "mimo-v2.5-pro" },
-        .{ .provider = "xiaomi-token-plan-sgp", .api = "anthropic-messages", .base_url = "https://token-plan-sgp.xiaomimimo.com/anthropic", .default_model_id = "mimo-v2.5-pro" },
+        .{ .provider = "xiaomi", .api = "openai-completions", .base_url = "https://api.xiaomimimo.com/v1", .default_model_id = "mimo-v2.5-pro" },
+        .{ .provider = "xiaomi-token-plan-cn", .api = "openai-completions", .base_url = "https://token-plan-cn.xiaomimimo.com/v1", .default_model_id = "mimo-v2.5-pro" },
+        .{ .provider = "xiaomi-token-plan-ams", .api = "openai-completions", .base_url = "https://token-plan-ams.xiaomimimo.com/v1", .default_model_id = "mimo-v2.5-pro" },
+        .{ .provider = "xiaomi-token-plan-sgp", .api = "openai-completions", .base_url = "https://token-plan-sgp.xiaomimimo.com/v1", .default_model_id = "mimo-v2.5-pro" },
     };
 
     for (cases) |case| {
@@ -1209,7 +1216,7 @@ test "scoped pattern matching resolves exact and partial models" {
 
     const anthropic_match = matchScopedModel("anthropic/sonnet").?;
     try std.testing.expectEqualStrings("anthropic", anthropic_match.provider);
-    try std.testing.expectEqualStrings("claude-sonnet-4-6", anthropic_match.id);
+    try std.testing.expectEqualStrings("claude-sonnet-5", anthropic_match.id);
 
     const canonical_match = matchScopedModel("openrouter/moonshotai/kimi-k2.6").?;
     try std.testing.expectEqualStrings("openrouter", canonical_match.provider);
