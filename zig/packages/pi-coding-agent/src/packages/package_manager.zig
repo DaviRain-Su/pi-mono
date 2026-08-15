@@ -4,6 +4,7 @@ const package_command_parser = @import("package_command_parser.zig");
 const package_process_runner = @import("package_process_runner.zig");
 const package_settings_store = @import("package_settings_store.zig");
 const package_sources = @import("package_sources.zig");
+const project_trust = @import("../core/project_trust.zig");
 const self_update = @import("self_update.zig");
 
 /// TypeScript/process extension package manager.
@@ -56,6 +57,8 @@ pub const ExecuteOptions = struct {
     current_version: []const u8 = "0.1.0",
     stdout_is_tty: bool = false,
     env_map: ?*const std.process.Environ.Map = null,
+    /// Resolved for this command. `executePackageCommand` overwrites this.
+    project_trusted: bool = true,
     fail_settings_write_for_testing: bool = false,
     fail_lockfile_write_for_testing: bool = false,
     fail_policy_write_for_testing: bool = false,
@@ -83,13 +86,50 @@ pub fn executePackageCommand(
         return .{ .exit_code = 1 };
     }
 
+    var empty_env = std.process.Environ.Map.init(allocator);
+    defer empty_env.deinit();
+    const env_map = options.env_map orelse &empty_env;
+
+    var exec_options = options;
+    exec_options.project_trusted = try resolvePackageProjectTrusted(allocator, io, command, options, env_map);
+
+    if (command.local and !exec_options.project_trusted) {
+        const message = switch (command.command) {
+            .config => "Project is not trusted. Use --approve to modify local resource config.",
+            else => "Project is not trusted. Use --approve to modify local package config.",
+        };
+        try stderr.print("Error: {s}\n", .{message});
+        return .{ .exit_code = 1 };
+    }
+
     return switch (command.command) {
-        .install => executeInstall(allocator, io, command, options, stdout, stderr),
-        .remove => executeRemove(allocator, io, command, options, stdout, stderr),
-        .list => executeList(allocator, io, options, stdout),
-        .config => executeConfig(allocator, io, command, options, stdout),
-        .update => executeUpdate(allocator, io, command, options, stdout, stderr),
+        .install => executeInstall(allocator, io, command, exec_options, stdout, stderr),
+        .remove => executeRemove(allocator, io, command, exec_options, stdout, stderr),
+        .list => executeList(allocator, io, exec_options, stdout),
+        .config => executeConfig(allocator, io, command, exec_options, stdout),
+        .update => executeUpdate(allocator, io, command, exec_options, stdout, stderr),
     };
+}
+
+fn resolvePackageProjectTrusted(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    command: ParsedCommand,
+    options: ExecuteOptions,
+    env_map: *const std.process.Environ.Map,
+) !bool {
+    if (command.command == .update) {
+        if (command.project_trust_override) |value| return value;
+        const store = project_trust.ProjectTrustStore.init(allocator, io, options.agent_dir);
+        return (try store.get(options.cwd)) orelse false;
+    }
+
+    return project_trust.resolveProjectTrusted(allocator, io, env_map, .{
+        .cwd = options.cwd,
+        .agent_dir = options.agent_dir,
+        .override = command.project_trust_override,
+        .default_project_trust = project_trust.peekDefaultProjectTrust(allocator, io, options.agent_dir),
+    });
 }
 
 fn executeInstall(
@@ -229,7 +269,8 @@ fn collectUpdateSources(
     var result: std.ArrayList(UpdateSource) = .empty;
     errdefer freeUpdateSources(allocator, &result);
 
-    inline for (.{ false, true }) |is_project| {
+    for ([2]bool{ false, true }) |is_project| {
+        if (is_project and !options.project_trusted) continue;
         var sources = try collectScopePackages(allocator, io, options, is_project);
         defer package_settings_store.freeOwnedStrings(allocator, &sources);
         for (sources.items) |entry| {
@@ -321,7 +362,10 @@ fn executeList(
 ) !ExecuteResult {
     var user_entries = try collectListEntries(allocator, io, options, false);
     defer freeListEntries(allocator, &user_entries);
-    var project_entries = try collectListEntries(allocator, io, options, true);
+    var project_entries = if (options.project_trusted)
+        try collectListEntries(allocator, io, options, true)
+    else
+        std.ArrayList(ListEntry).empty;
     defer freeListEntries(allocator, &project_entries);
 
     if (user_entries.items.len == 0 and project_entries.items.len == 0) {
@@ -401,11 +445,11 @@ fn executeConfig(
 ) !ExecuteResult {
     const config_options = command.config_options;
     const kind = config_options.toggle_kind orelse {
-        try stdout.writeAll("Usage: pi config [--toggle <kind> <pattern> --enable|--disable] [-l]\n");
+        try stdout.writeAll("Usage: pi config [--toggle <kind> <pattern> --enable|--disable] [-l] [--approve|--no-approve]\n");
         return .{ .exit_code = 0 };
     };
     const pattern = config_options.toggle_pattern orelse {
-        try stdout.writeAll("Usage: pi config [--toggle <kind> <pattern> --enable|--disable] [-l]\n");
+        try stdout.writeAll("Usage: pi config [--toggle <kind> <pattern> --enable|--disable] [-l] [--approve|--no-approve]\n");
         return .{ .exit_code = 0 };
     };
 
@@ -442,7 +486,7 @@ fn writePackageCommandHelp(stdout: *std.Io.Writer, command: PackageCommand) !voi
     switch (command) {
         .install => try stdout.writeAll(
             \\Usage:
-            \\  pi install <source> [-l]
+            \\  pi install <source> [-l] [--approve|--no-approve]
             \\
             \\Install a TypeScript extension package and add it to settings.
             \\
@@ -454,31 +498,256 @@ fn writePackageCommandHelp(stdout: *std.Io.Writer, command: PackageCommand) !voi
         ),
         .remove => try stdout.writeAll(
             \\Usage:
-            \\  pi remove <source> [-l]
+            \\  pi remove <source> [-l] [--approve|--no-approve]
             \\
             \\Remove a configured TypeScript extension package from settings.
             \\
         ),
         .update => try stdout.writeAll(
             \\Usage:
-            \\  pi update [source|self|pi] [--self] [--extensions] [--extension <source>] [--force]
+            \\  pi update [source|self|pi] [--self] [--extensions] [--extension <source>] [--approve|--no-approve] [--force]
             \\
             \\Refresh configured TypeScript extension packages. Local packages are already live.
             \\
         ),
         .list => try stdout.writeAll(
             \\Usage:
-            \\  pi list
+            \\  pi list [--approve|--no-approve]
             \\
             \\List configured TypeScript extension packages.
             \\
         ),
         .config => try stdout.writeAll(
             \\Usage:
-            \\  pi config [--toggle <kind> <pattern> --enable|--disable] [-l]
+            \\  pi config [--toggle <kind> <pattern> --enable|--disable] [-l] [--approve|--no-approve]
             \\
             \\Toggle package resource filters in settings.
             \\
         ),
     }
+}
+
+const PackageTrustFixture = struct {
+    tmp: std.testing.TmpDir,
+    agent_dir: []u8,
+    project_dir: []u8,
+    env_map: std.process.Environ.Map,
+
+    fn init(allocator: std.mem.Allocator) !PackageTrustFixture {
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+        try tmp.dir.createDirPath(std.testing.io, "agent");
+        try tmp.dir.createDirPath(std.testing.io, "project");
+        const agent_dir = try makeTmpPath(allocator, tmp, "agent");
+        errdefer allocator.free(agent_dir);
+        const project_dir = try makeTmpPath(allocator, tmp, "project");
+        errdefer allocator.free(project_dir);
+        var env_map = std.process.Environ.Map.init(allocator);
+        errdefer env_map.deinit();
+        try env_map.put("HOME", project_dir);
+        return .{
+            .tmp = tmp,
+            .agent_dir = agent_dir,
+            .project_dir = project_dir,
+            .env_map = env_map,
+        };
+    }
+
+    fn deinit(self: *PackageTrustFixture, allocator: std.mem.Allocator) void {
+        self.env_map.deinit();
+        allocator.free(self.agent_dir);
+        allocator.free(self.project_dir);
+        self.tmp.cleanup();
+    }
+
+    fn writeProjectSettings(self: *PackageTrustFixture, data: []const u8) !void {
+        try self.tmp.dir.createDirPath(std.testing.io, "project/.pi");
+        try self.tmp.dir.writeFile(std.testing.io, .{
+            .sub_path = "project/.pi/settings.json",
+            .data = data,
+        });
+    }
+
+    fn executeOptions(self: *PackageTrustFixture) ExecuteOptions {
+        return .{
+            .cwd = self.project_dir,
+            .agent_dir = self.agent_dir,
+            .env_map = &self.env_map,
+        };
+    }
+};
+
+fn runPackageArgs(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    options: ExecuteOptions,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !ExecuteResult {
+    var command = try parsePackageCommand(allocator, args);
+    defer command.deinit(allocator);
+    return executePackageCommand(allocator, std.testing.io, command, options, stdout, stderr);
+}
+
+test "local package writes fail when the project is untrusted" {
+    const allocator = std.testing.allocator;
+    var fixture = try PackageTrustFixture.init(allocator);
+    defer fixture.deinit(allocator);
+    try fixture.writeProjectSettings("{}");
+
+    var stdout_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stdout_capture.deinit();
+    var stderr_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr_capture.deinit();
+
+    const result = try runPackageArgs(
+        allocator,
+        &.{ "install", "-l", "./pkg" },
+        fixture.executeOptions(),
+        &stdout_capture.writer,
+        &stderr_capture.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 1), result.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_capture.writer.buffered(), "Use --approve to modify local package config.") != null);
+}
+
+test "local package writes succeed with --approve" {
+    const allocator = std.testing.allocator;
+    var fixture = try PackageTrustFixture.init(allocator);
+    defer fixture.deinit(allocator);
+    try fixture.writeProjectSettings("{}");
+
+    var stdout_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stdout_capture.deinit();
+    var stderr_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr_capture.deinit();
+
+    const result = try runPackageArgs(
+        allocator,
+        &.{ "install", "-l", "./pkg", "--approve" },
+        fixture.executeOptions(),
+        &stdout_capture.writer,
+        &stderr_capture.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_capture.writer.buffered(), "Installed ./pkg") != null);
+}
+
+test "local package writes initialize a fresh project without --approve" {
+    const allocator = std.testing.allocator;
+    var fixture = try PackageTrustFixture.init(allocator);
+    defer fixture.deinit(allocator);
+
+    var stdout_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stdout_capture.deinit();
+    var stderr_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr_capture.deinit();
+
+    const result = try runPackageArgs(
+        allocator,
+        &.{ "install", "-l", "./pkg" },
+        fixture.executeOptions(),
+        &stdout_capture.writer,
+        &stderr_capture.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_capture.writer.buffered(), "Installed ./pkg") != null);
+}
+
+test "list hides project packages unless the project is trusted" {
+    const allocator = std.testing.allocator;
+    var fixture = try PackageTrustFixture.init(allocator);
+    defer fixture.deinit(allocator);
+    try fixture.writeProjectSettings("{\"packages\":[\"npm:@project/pkg\"]}");
+
+    var hidden_out: std.Io.Writer.Allocating = .init(allocator);
+    defer hidden_out.deinit();
+    var hidden_err: std.Io.Writer.Allocating = .init(allocator);
+    defer hidden_err.deinit();
+    const hidden = try runPackageArgs(
+        allocator,
+        &.{"list"},
+        fixture.executeOptions(),
+        &hidden_out.writer,
+        &hidden_err.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 0), hidden.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, hidden_out.writer.buffered(), "No packages installed.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hidden_out.writer.buffered(), "Project packages:") == null);
+
+    var approved_out: std.Io.Writer.Allocating = .init(allocator);
+    defer approved_out.deinit();
+    var approved_err: std.Io.Writer.Allocating = .init(allocator);
+    defer approved_err.deinit();
+    const approved = try runPackageArgs(
+        allocator,
+        &.{ "list", "--approve" },
+        fixture.executeOptions(),
+        &approved_out.writer,
+        &approved_err.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 0), approved.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, approved_out.writer.buffered(), "Project packages:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, approved_out.writer.buffered(), "npm:@project/pkg") != null);
+
+    const store = project_trust.ProjectTrustStore.init(allocator, std.testing.io, fixture.agent_dir);
+    try store.set(fixture.project_dir, true);
+
+    var remembered_out: std.Io.Writer.Allocating = .init(allocator);
+    defer remembered_out.deinit();
+    var remembered_err: std.Io.Writer.Allocating = .init(allocator);
+    defer remembered_err.deinit();
+    const remembered = try runPackageArgs(
+        allocator,
+        &.{"list"},
+        fixture.executeOptions(),
+        &remembered_out.writer,
+        &remembered_err.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 0), remembered.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, remembered_out.writer.buffered(), "npm:@project/pkg") != null);
+
+    var denied_out: std.Io.Writer.Allocating = .init(allocator);
+    defer denied_out.deinit();
+    var denied_err: std.Io.Writer.Allocating = .init(allocator);
+    defer denied_err.deinit();
+    const denied = try runPackageArgs(
+        allocator,
+        &.{ "list", "--no-approve" },
+        fixture.executeOptions(),
+        &denied_out.writer,
+        &denied_err.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 0), denied.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, denied_out.writer.buffered(), "No packages installed.") != null);
+}
+
+test "local config writes fail when the project is untrusted" {
+    const allocator = std.testing.allocator;
+    var fixture = try PackageTrustFixture.init(allocator);
+    defer fixture.deinit(allocator);
+    try fixture.writeProjectSettings("{}");
+
+    var stdout_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stdout_capture.deinit();
+    var stderr_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr_capture.deinit();
+
+    const result = try runPackageArgs(
+        allocator,
+        &.{ "config", "-l", "--toggle", "extensions", "extras/main.ts", "--enable" },
+        fixture.executeOptions(),
+        &stdout_capture.writer,
+        &stderr_capture.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 1), result.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_capture.writer.buffered(), "Use --approve to modify local resource config.") != null);
+}
+
+fn makeTmpPath(allocator: std.mem.Allocator, tmp: anytype, name: []const u8) ![]u8 {
+    const cwd = try std.process.currentPathAlloc(std.testing.io, allocator);
+    defer allocator.free(cwd);
+    const relative_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, name });
+    defer allocator.free(relative_path);
+    return std.fs.path.resolve(allocator, &.{ cwd, relative_path });
 }

@@ -474,12 +474,17 @@ fn renderBaseHelp(allocator: std.mem.Allocator, version: []const u8) ![]u8 {
         \\  pi [options] [@files...] [messages...]
         \\
         \\Commands:
-        \\  pi install <source> [-l]       Install extension source and add to settings
-        \\  pi remove <source> [-l]        Remove extension source from settings
+        \\  pi install <source> [-l] [--approve|--no-approve]
+        \\                                 Install extension source and add to settings
+        \\  pi remove <source> [-l] [--approve|--no-approve]
+        \\                                 Remove extension source from settings
         \\  pi uninstall <source> [-l]     Alias for remove
-        \\  pi update [source]             Update installed extensions (offline no-op for local fixtures)
-        \\  pi list                        List installed extensions from settings
-        \\  pi config                      Manage package resource toggles in settings
+        \\  pi update [source] [--approve|--no-approve]
+        \\                                 Update installed extensions (offline no-op for local fixtures)
+        \\  pi list [--approve|--no-approve]
+        \\                                 List installed extensions from settings
+        \\  pi config [-l] [--approve|--no-approve]
+        \\                                 Manage package resource toggles in settings
         \\  pi <command> --help            Show help for install/remove/uninstall/update/list/config
         \\
         \\Note: release/binary packaging (self-update, packaged installers) is not

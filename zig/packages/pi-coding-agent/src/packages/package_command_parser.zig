@@ -42,6 +42,8 @@ pub const ParsedCommand = struct {
     local: bool = false,
     force: bool = false,
     help: bool = false,
+    /// `--approve`/`-a` → true, `--no-approve`/`-na` → false. Last flag wins.
+    project_trust_override: ?bool = null,
     /// True when self-update is included in an .all target (i.e. the user
     /// passed --self alongside --extensions or used `pi update self --extensions`).
     /// Used by executeUpdate(.all) to decide whether to also run self-update.
@@ -140,6 +142,14 @@ pub fn parsePackageCommand(allocator: std.mem.Allocator, args: []const []const u
                     );
                 }
             }
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--approve") or std.mem.eql(u8, arg, "-a")) {
+            result.project_trust_override = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-approve") or std.mem.eql(u8, arg, "-na")) {
+            result.project_trust_override = false;
             continue;
         }
         if (std.mem.eql(u8, arg, "--force")) {
@@ -394,11 +404,11 @@ pub fn packageCommandName(command: PackageCommand) []const u8 {
 
 pub fn packageCommandUsage(command: PackageCommand) []const u8 {
     return switch (command) {
-        .install => "pi install <source> [-l]",
-        .remove => "pi remove <source> [-l]",
-        .update => "pi update [source|self|pi] [--self] [--extensions] [--extension <source>] [--force]",
-        .list => "pi list",
-        .config => "pi config [--toggle <kind> <pattern> --enable|--disable] [-l]",
+        .install => "pi install <source> [-l] [--approve|--no-approve]",
+        .remove => "pi remove <source> [-l] [--approve|--no-approve]",
+        .update => "pi update [source|self|pi] [--self] [--extensions] [--extension <source>] [--approve|--no-approve] [--force]",
+        .list => "pi list [--approve|--no-approve]",
+        .config => "pi config [--toggle <kind> <pattern> --enable|--disable] [-l] [--approve|--no-approve]",
     };
 }
 
@@ -539,4 +549,27 @@ test "parsePackageCommand records config toggle options" {
     try std.testing.expectEqual(ConfigKind.extensions, parsed.config_options.toggle_kind.?);
     try std.testing.expectEqual(ConfigToggleAction.disable, parsed.config_options.toggle_action);
     try std.testing.expectEqualStrings("extras/main.ts", parsed.config_options.toggle_pattern.?);
+}
+
+test "parsePackageCommand accepts --approve and --no-approve on every package command" {
+    const allocator = std.testing.allocator;
+
+    var install_approve = try parsePackageCommand(allocator, &.{ "install", "./pkg", "-a" });
+    defer install_approve.deinit(allocator);
+    try std.testing.expect(install_approve.parse_error == null);
+    try std.testing.expectEqual(true, install_approve.project_trust_override.?);
+
+    var list_deny = try parsePackageCommand(allocator, &.{ "list", "--no-approve" });
+    defer list_deny.deinit(allocator);
+    try std.testing.expect(list_deny.parse_error == null);
+    try std.testing.expectEqual(false, list_deny.project_trust_override.?);
+
+    var update_short = try parsePackageCommand(allocator, &.{ "update", "--extensions", "-na" });
+    defer update_short.deinit(allocator);
+    try std.testing.expect(update_short.parse_error == null);
+    try std.testing.expectEqual(false, update_short.project_trust_override.?);
+
+    var last_wins = try parsePackageCommand(allocator, &.{ "list", "--approve", "--no-approve" });
+    defer last_wins.deinit(allocator);
+    try std.testing.expectEqual(false, last_wins.project_trust_override.?);
 }
