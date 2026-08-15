@@ -57,69 +57,93 @@ pub fn prepareCliRuntime(
     selected_tools: tool_selection.ToolSelection,
     allow_trust_prompt: bool,
 ) !PreparedCliRuntime {
-    var runtime_config = try config_mod.loadRuntimeConfigWithOptions(
+    return prepareCliRuntimeEx(allocator, io, env_map, cwd, options, selected_tools, allow_trust_prompt, null);
+}
+
+pub fn prepareCliRuntimeEx(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    cwd: []const u8,
+    options: *const cli.Args,
+    selected_tools: tool_selection.ToolSelection,
+    allow_trust_prompt: bool,
+    extension_probe: ?project_trust.ExtensionTrustProbe,
+) !PreparedCliRuntime {
+    const should_consult = try project_trust.shouldConsultProjectTrustExtensions(
         allocator,
         io,
         env_map,
         cwd,
-        try runtimeConfigLoadOptions(allocator, io, env_map, cwd, options, allow_trust_prompt),
+        options.project_trust_override,
     );
-    errdefer runtime_config.deinit();
-    const effective_tools = selected_tools.withDefaultBuiltins(runtime_config.defaultTools());
+    var loaded = if (should_consult)
+        try loadRuntimeAndBundle(allocator, io, env_map, cwd, options, .{
+            .discover_models = bootstrap.startupNetworkOperationsEnabled(options, env_map),
+            .project_trusted = false,
+        })
+    else
+        try loadRuntimeAndBundle(
+            allocator,
+            io,
+            env_map,
+            cwd,
+            options,
+            try runtimeConfigLoadOptionsEx(allocator, io, env_map, cwd, options, allow_trust_prompt, extension_probe),
+        );
+    errdefer {
+        loaded.bundle.deinit(allocator);
+        loaded.config.deinit();
+    }
 
-    var resource_bundle = try resources_mod.loadResourceBundle(allocator, io, .{
-        .cwd = cwd,
-        .agent_dir = runtime_config.agent_dir,
-        .global = settingsResources(runtime_config.global_settings),
-        .project = settingsResources(runtime_config.project_settings),
-        .cli_extensions = options.extensions orelse &.{},
-        .cli_skills = options.skills orelse &.{},
-        .cli_prompts = options.prompt_templates orelse &.{},
-        .cli_themes = options.themes orelse &.{},
-        .runtime_theme = options.use_theme,
-        .env_map = env_map,
-        .include_default_extensions = !options.no_extensions,
-        .include_default_skills = !options.no_skills,
-        .include_default_prompts = !options.no_prompt_templates,
-        .include_default_themes = !options.no_themes,
-        .project_trusted = runtime_config.project_trusted,
-    });
-    errdefer resource_bundle.deinit(allocator);
+    if (should_consult) {
+        const project_trusted = try resolveRuntimeProjectTrusted(
+            allocator,
+            io,
+            env_map,
+            cwd,
+            options,
+            allow_trust_prompt,
+            extension_probe,
+        );
+        if (project_trusted) {
+            const reloaded = try loadRuntimeAndBundle(allocator, io, env_map, cwd, options, .{
+                .discover_models = bootstrap.startupNetworkOperationsEnabled(options, env_map),
+                .project_trusted = true,
+            });
+            loaded.bundle.deinit(allocator);
+            loaded.config.deinit();
+            loaded = reloaded;
+        }
+    }
+
+    const effective_tools = selected_tools.withDefaultBuiltins(loaded.config.defaultTools());
 
     var extension_contributions = try collectExtensionBootstrapContributions(
         allocator,
         io,
         env_map,
         cwd,
-        &runtime_config,
-        resource_bundle.extensions,
+        &loaded.config,
+        loaded.bundle.extensions,
         effective_tools,
     );
     errdefer extension_contributions.deinit();
 
     if (extension_contributions.resource_discoveries.len > 0) {
-        const discovered_bundle = try resources_mod.loadResourceBundle(allocator, io, .{
-            .cwd = cwd,
-            .agent_dir = runtime_config.agent_dir,
-            .global = settingsResources(runtime_config.global_settings),
-            .project = settingsResources(runtime_config.project_settings),
-            .cli_extensions = options.extensions orelse &.{},
-            .cli_skills = options.skills orelse &.{},
-            .cli_prompts = options.prompt_templates orelse &.{},
-            .cli_themes = options.themes orelse &.{},
-            .runtime_theme = options.use_theme,
-            .env_map = env_map,
-            .include_default_extensions = !options.no_extensions,
-            .include_default_skills = !options.no_skills,
-            .include_default_prompts = !options.no_prompt_templates,
-            .include_default_themes = !options.no_themes,
-            .extension_discoveries = extension_contributions.resource_discoveries,
-            .project_trusted = runtime_config.project_trusted,
-        });
-        resource_bundle.deinit(allocator);
-        resource_bundle = discovered_bundle;
+        const discovered_bundle = try loadResourceBundleForRuntime(
+            allocator,
+            io,
+            env_map,
+            cwd,
+            options,
+            &loaded.config,
+            extension_contributions.resource_discoveries,
+        );
+        loaded.bundle.deinit(allocator);
+        loaded.bundle = discovered_bundle;
     }
-    try appendProviderDiagnosticsToResourceBundle(allocator, &resource_bundle, extension_contributions.provider_diagnostics);
+    try appendProviderDiagnosticsToResourceBundle(allocator, &loaded.bundle, extension_contributions.provider_diagnostics);
 
     const context_files = if (options.no_context_files)
         try allocator.dupe(context_files_mod.ContextFile, &.{})
@@ -130,13 +154,13 @@ pub fn prepareCliRuntime(
     const current_date = try currentDateString(allocator, io);
     errdefer allocator.free(current_date);
 
-    const initial_model = try selectInitialModel(allocator, env_map, &runtime_config, options);
+    const initial_model = try selectInitialModel(allocator, env_map, &loaded.config, options);
     const provider_name = initial_model.provider_name;
     const model_name = initial_model.model_name;
     const thinking_level = if (options.thinking) |level|
         mapThinkingLevel(level)
     else
-        initial_model.thinking_level orelse runtime_config.settings.default_thinking_level orelse .off;
+        initial_model.thinking_level orelse loaded.config.settings.default_thinking_level orelse .off;
 
     const system_prompt = try coding_agent.buildSystemPrompt(allocator, .{
         .cwd = cwd,
@@ -145,25 +169,25 @@ pub fn prepareCliRuntime(
         .append_prompts = options.append_system_prompt orelse &.{},
         .tool_selection = effective_tools,
         .context_files = context_files,
-        .skills = resource_bundle.skills,
+        .skills = loaded.bundle.skills,
     });
     errdefer allocator.free(system_prompt);
 
     const session_dir = if (options.session_dir) |value|
         try config_mod.expandPath(allocator, env_map, value, cwd)
     else
-        try runtime_config.effectiveSessionDir(allocator, env_map, cwd);
+        try loaded.config.effectiveSessionDir(allocator, env_map, cwd);
     errdefer allocator.free(session_dir);
 
-    const expanded_messages = try expandMessages(allocator, options.messages orelse &.{}, resource_bundle.prompt_templates);
+    const expanded_messages = try expandMessages(allocator, options.messages orelse &.{}, loaded.bundle.prompt_templates);
     errdefer {
         for (expanded_messages) |message| allocator.free(message);
         if (expanded_messages.len > 0) allocator.free(expanded_messages);
     }
 
     return .{
-        .runtime_config = runtime_config,
-        .resource_bundle = resource_bundle,
+        .runtime_config = loaded.config,
+        .resource_bundle = loaded.bundle,
         .context_files = context_files,
         .system_prompt = system_prompt,
         .current_date = current_date,
@@ -282,6 +306,85 @@ pub fn refreshSystemPromptWithActiveTools(
     prepared.system_prompt = next_system_prompt;
 }
 
+const LoadedRuntime = struct {
+    config: config_mod.RuntimeConfig,
+    bundle: resources_mod.ResourceBundle,
+};
+
+fn loadRuntimeAndBundle(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    cwd: []const u8,
+    options: *const cli.Args,
+    load_options: config_mod.RuntimeConfigLoadOptions,
+) !LoadedRuntime {
+    var config = try config_mod.loadRuntimeConfigWithOptions(allocator, io, env_map, cwd, load_options);
+    errdefer config.deinit();
+    const bundle = try loadResourceBundleForRuntime(allocator, io, env_map, cwd, options, &config, &.{});
+    return .{
+        .config = config,
+        .bundle = bundle,
+    };
+}
+
+fn loadResourceBundleForRuntime(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    cwd: []const u8,
+    options: *const cli.Args,
+    runtime_config: *const config_mod.RuntimeConfig,
+    extension_discoveries: []const resources_mod.ExtensionDiscoveredResources,
+) !resources_mod.ResourceBundle {
+    return resources_mod.loadResourceBundle(allocator, io, .{
+        .cwd = cwd,
+        .agent_dir = runtime_config.agent_dir,
+        .global = settingsResources(runtime_config.global_settings),
+        .project = settingsResources(runtime_config.project_settings),
+        .cli_extensions = options.extensions orelse &.{},
+        .cli_skills = options.skills orelse &.{},
+        .cli_prompts = options.prompt_templates orelse &.{},
+        .cli_themes = options.themes orelse &.{},
+        .runtime_theme = options.use_theme,
+        .env_map = env_map,
+        .include_default_extensions = !options.no_extensions,
+        .include_default_skills = !options.no_skills,
+        .include_default_prompts = !options.no_prompt_templates,
+        .include_default_themes = !options.no_themes,
+        .extension_discoveries = extension_discoveries,
+        .project_trusted = runtime_config.project_trusted,
+    });
+}
+
+fn resolveRuntimeProjectTrusted(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    cwd: []const u8,
+    options: *const cli.Args,
+    allow_trust_prompt: bool,
+    extension_probe: ?project_trust.ExtensionTrustProbe,
+) !bool {
+    const agent_dir = try config_mod.resolveAgentDir(allocator, env_map);
+    defer allocator.free(agent_dir);
+    const extension_decision = if (extension_probe) |probe|
+        try probe.func(probe.ctx, cwd)
+    else
+        null;
+    const resolve_options = project_trust.ResolveProjectTrustedOptions{
+        .cwd = cwd,
+        .agent_dir = agent_dir,
+        .override = options.project_trust_override,
+        .default_project_trust = project_trust.peekDefaultProjectTrust(allocator, io, agent_dir),
+        .has_ui = allow_trust_prompt,
+        .extension_decision = extension_decision,
+    };
+    if (allow_trust_prompt and try project_trust.needsProjectTrustPrompt(allocator, io, env_map, resolve_options))
+        return project_trust_selector.promptAndApplyProjectTrust(allocator, io, env_map, cwd, agent_dir);
+    return project_trust.resolveProjectTrusted(allocator, io, env_map, resolve_options);
+}
+
 pub fn runtimeConfigLoadOptions(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -290,23 +393,29 @@ pub fn runtimeConfigLoadOptions(
     options: *const cli.Args,
     allow_trust_prompt: bool,
 ) !config_mod.RuntimeConfigLoadOptions {
-    const agent_dir = try config_mod.resolveAgentDir(allocator, env_map);
-    defer allocator.free(agent_dir);
-    const default_trust = project_trust.peekDefaultProjectTrust(allocator, io, agent_dir);
-    const resolve_options = project_trust.ResolveProjectTrustedOptions{
-        .cwd = cwd,
-        .agent_dir = agent_dir,
-        .override = options.project_trust_override,
-        .default_project_trust = default_trust,
-        .has_ui = allow_trust_prompt,
-    };
-    const project_trusted = if (allow_trust_prompt and try project_trust.needsProjectTrustPrompt(allocator, io, env_map, resolve_options))
-        try project_trust_selector.promptAndApplyProjectTrust(allocator, io, env_map, cwd, agent_dir)
-    else
-        try project_trust.resolveProjectTrusted(allocator, io, env_map, resolve_options);
+    return runtimeConfigLoadOptionsEx(allocator, io, env_map, cwd, options, allow_trust_prompt, null);
+}
+
+pub fn runtimeConfigLoadOptionsEx(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    cwd: []const u8,
+    options: *const cli.Args,
+    allow_trust_prompt: bool,
+    extension_probe: ?project_trust.ExtensionTrustProbe,
+) !config_mod.RuntimeConfigLoadOptions {
     return .{
         .discover_models = bootstrap.startupNetworkOperationsEnabled(options, env_map),
-        .project_trusted = project_trusted,
+        .project_trusted = try resolveRuntimeProjectTrusted(
+            allocator,
+            io,
+            env_map,
+            cwd,
+            options,
+            allow_trust_prompt,
+            extension_probe,
+        ),
     };
 }
 
@@ -646,4 +755,176 @@ test "prepareCliRuntime reports missing CLI model without provider" {
 
     try std.testing.expect(prepared.model_error != null);
     try std.testing.expect(std.mem.indexOf(u8, prepared.model_error.?, "not found") != null);
+}
+
+const TrustRuntimeFixture = struct {
+    tmp: std.testing.TmpDir,
+    home_dir: []u8,
+    project_dir: []u8,
+    env_map: std.process.Environ.Map,
+
+    fn init(allocator: std.mem.Allocator) !TrustRuntimeFixture {
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+        try tmp.dir.createDirPath(std.testing.io, "home/.pi/agent/extensions");
+        try tmp.dir.createDirPath(std.testing.io, "project/.pi/extensions");
+        try tmp.dir.writeFile(std.testing.io, .{
+            .sub_path = "home/.pi/agent/extensions/user.ts",
+            .data = "export default function () {}",
+        });
+        try tmp.dir.writeFile(std.testing.io, .{
+            .sub_path = "project/.pi/extensions/project.ts",
+            .data = "export default function () {}",
+        });
+        try tmp.dir.writeFile(std.testing.io, .{
+            .sub_path = "project/.pi/settings.json",
+            .data = "{}",
+        });
+
+        const home_dir = try makeTmpPath(allocator, tmp, "home");
+        errdefer allocator.free(home_dir);
+        const project_dir = try makeTmpPath(allocator, tmp, "project");
+        errdefer allocator.free(project_dir);
+        var env_map = std.process.Environ.Map.init(allocator);
+        errdefer env_map.deinit();
+        try env_map.put("HOME", home_dir);
+        return .{
+            .tmp = tmp,
+            .home_dir = home_dir,
+            .project_dir = project_dir,
+            .env_map = env_map,
+        };
+    }
+
+    fn deinit(self: *TrustRuntimeFixture, allocator: std.mem.Allocator) void {
+        self.env_map.deinit();
+        allocator.free(self.home_dir);
+        allocator.free(self.project_dir);
+        self.tmp.cleanup();
+    }
+
+    fn agentDir(self: TrustRuntimeFixture, allocator: std.mem.Allocator) ![]u8 {
+        return std.fs.path.join(allocator, &.{ self.home_dir, ".pi", "agent" });
+    }
+};
+
+fn makeTmpPath(allocator: std.mem.Allocator, tmp: anytype, name: []const u8) ![]u8 {
+    const cwd = try std.process.currentPathAlloc(std.testing.io, allocator);
+    defer allocator.free(cwd);
+    const relative_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, name });
+    defer allocator.free(relative_path);
+    return std.fs.path.resolve(allocator, &.{ cwd, relative_path });
+}
+
+fn bundleHasExtension(bundle: resources_mod.ResourceBundle, needle: []const u8) bool {
+    for (bundle.extensions) |extension| {
+        if (std.mem.indexOf(u8, extension.path, needle) != null) return true;
+    }
+    return false;
+}
+
+fn extensionTrustYes(_: ?*anyopaque, _: []const u8) !?project_trust.ExtensionTrustDecision {
+    return .{ .trusted = true, .remember = true };
+}
+
+fn extensionTrustNo(_: ?*anyopaque, _: []const u8) !?project_trust.ExtensionTrustDecision {
+    return .{ .trusted = false, .remember = false };
+}
+
+test "prepareCliRuntime loads user extensions before project trust is resolved" {
+    const allocator = std.testing.allocator;
+    var fixture = try TrustRuntimeFixture.init(allocator);
+    defer fixture.deinit(allocator);
+
+    var args = try cli.parseArgs(allocator, &.{"--offline"});
+    defer args.deinit(allocator);
+
+    var prepared = try prepareCliRuntime(
+        allocator,
+        std.testing.io,
+        &fixture.env_map,
+        fixture.project_dir,
+        &args,
+        .{},
+        false,
+    );
+    defer prepared.deinit(allocator);
+
+    try std.testing.expect(!prepared.runtime_config.project_trusted);
+    try std.testing.expect(bundleHasExtension(prepared.resource_bundle, "user.ts"));
+    try std.testing.expect(!bundleHasExtension(prepared.resource_bundle, "project.ts"));
+}
+
+test "prepareCliRuntime reloads project extensions after a trusted store decision" {
+    const allocator = std.testing.allocator;
+    var fixture = try TrustRuntimeFixture.init(allocator);
+    defer fixture.deinit(allocator);
+
+    const agent_dir = try fixture.agentDir(allocator);
+    defer allocator.free(agent_dir);
+    const store = project_trust.ProjectTrustStore.init(allocator, std.testing.io, agent_dir);
+    try store.set(fixture.project_dir, true);
+
+    var args = try cli.parseArgs(allocator, &.{"--offline"});
+    defer args.deinit(allocator);
+
+    var prepared = try prepareCliRuntime(
+        allocator,
+        std.testing.io,
+        &fixture.env_map,
+        fixture.project_dir,
+        &args,
+        .{},
+        false,
+    );
+    defer prepared.deinit(allocator);
+
+    try std.testing.expect(prepared.runtime_config.project_trusted);
+    try std.testing.expect(bundleHasExtension(prepared.resource_bundle, "user.ts"));
+    try std.testing.expect(bundleHasExtension(prepared.resource_bundle, "project.ts"));
+}
+
+test "prepareCliRuntime extension probe can override trust.json before project resources load" {
+    const allocator = std.testing.allocator;
+    var fixture = try TrustRuntimeFixture.init(allocator);
+    defer fixture.deinit(allocator);
+
+    const agent_dir = try fixture.agentDir(allocator);
+    defer allocator.free(agent_dir);
+    const store = project_trust.ProjectTrustStore.init(allocator, std.testing.io, agent_dir);
+    try store.set(fixture.project_dir, false);
+
+    var args = try cli.parseArgs(allocator, &.{"--offline"});
+    defer args.deinit(allocator);
+
+    var trusted = try prepareCliRuntimeEx(
+        allocator,
+        std.testing.io,
+        &fixture.env_map,
+        fixture.project_dir,
+        &args,
+        .{},
+        false,
+        .{ .func = extensionTrustYes },
+    );
+    defer trusted.deinit(allocator);
+    try std.testing.expect(trusted.runtime_config.project_trusted);
+    try std.testing.expect(bundleHasExtension(trusted.resource_bundle, "project.ts"));
+    try std.testing.expectEqual(true, (try store.get(fixture.project_dir)).?);
+
+    try store.set(fixture.project_dir, true);
+    var untrusted = try prepareCliRuntimeEx(
+        allocator,
+        std.testing.io,
+        &fixture.env_map,
+        fixture.project_dir,
+        &args,
+        .{},
+        false,
+        .{ .func = extensionTrustNo },
+    );
+    defer untrusted.deinit(allocator);
+    try std.testing.expect(!untrusted.runtime_config.project_trusted);
+    try std.testing.expect(bundleHasExtension(untrusted.resource_bundle, "user.ts"));
+    try std.testing.expect(!bundleHasExtension(untrusted.resource_bundle, "project.ts"));
 }

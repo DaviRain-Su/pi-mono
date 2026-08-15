@@ -1,7 +1,9 @@
 const std = @import("std");
 const extension_runtime = @import("../extensions/extension_runtime.zig");
 const json_utils = @import("../json_utils.zig");
+const project_trust = @import("../core/project_trust.zig");
 const tools_common = @import("../tools/common.zig");
+const lifecycle_support = @import("../extensions/lifecycle_support.zig");
 
 pub const HookSeverity = enum {
     info,
@@ -135,6 +137,70 @@ pub fn wrapRuntimeAdapter(adapter: *const extension_runtime.RuntimeAdapter) Hook
         },
     };
 }
+
+pub fn parseProjectTrustHookResult(value: std.json.Value) ?project_trust.ExtensionTrustDecision {
+    if (value != .object) return null;
+    const trusted_value = value.object.get("trusted") orelse return null;
+    if (trusted_value != .string) return null;
+    const trusted = if (std.mem.eql(u8, trusted_value.string, "yes"))
+        true
+    else if (std.mem.eql(u8, trusted_value.string, "no"))
+        false
+    else
+        return null;
+    const remember = if (value.object.get("remember")) |remember_value|
+        remember_value == .bool and remember_value.bool
+    else
+        false;
+    return .{
+        .trusted = trusted,
+        .remember = remember,
+    };
+}
+
+pub fn emitProjectTrustFromHookRuntimes(
+    allocator: std.mem.Allocator,
+    runtimes: []const HookRuntime,
+    cwd: []const u8,
+    timeout_ms: u64,
+) !?project_trust.ExtensionTrustDecision {
+    var event_object = try std.json.ObjectMap.init(allocator, &.{}, &.{});
+    errdefer {
+        const value: std.json.Value = .{ .object = event_object };
+        tools_common.deinitJsonValue(allocator, value);
+    }
+    try json_utils.putString(allocator, &event_object, "type", "project_trust");
+    try json_utils.putString(allocator, &event_object, "cwd", cwd);
+    const event: std.json.Value = .{ .object = event_object };
+    defer tools_common.deinitJsonValue(allocator, event);
+
+    for (runtimes) |runtime| {
+        if (!runtime.hasHook("project_trust")) continue;
+        const invoked = runtime.invoke(allocator, "project_trust", event, timeout_ms) catch continue;
+        const result = invoked orelse continue;
+        defer tools_common.deinitJsonValue(allocator, result);
+        if (parseProjectTrustHookResult(result)) |decision| return decision;
+    }
+    return null;
+}
+
+pub const HookTrustProbe = struct {
+    allocator: std.mem.Allocator,
+    runtimes: []const HookRuntime,
+    timeout_ms: u64 = lifecycle_support.default_extension_handler_timeout_ms,
+
+    pub fn probe(ctx: ?*anyopaque, cwd: []const u8) !?project_trust.ExtensionTrustDecision {
+        const self: *HookTrustProbe = @ptrCast(@alignCast(ctx orelse return null));
+        return emitProjectTrustFromHookRuntimes(self.allocator, self.runtimes, cwd, self.timeout_ms);
+    }
+
+    pub fn asProbe(self: *HookTrustProbe) project_trust.ExtensionTrustProbe {
+        return .{
+            .ctx = self,
+            .func = probe,
+        };
+    }
+};
 
 pub fn wrapRuntimeAdapters(allocator: std.mem.Allocator, adapters: []const extension_runtime.RuntimeAdapter) ![]HookRuntime {
     if (adapters.len == 0) return try allocator.alloc(HookRuntime, 0);
@@ -274,4 +340,128 @@ test "hook runtime vtable dispatches through fixture" {
     try std.testing.expect(fixture.diagnostics_drained);
     try std.testing.expectEqual(@as(usize, 1), diagnostics.len);
     try std.testing.expectEqualStrings("fixture warning", diagnostics[0].message);
+}
+
+test "parseProjectTrustHookResult accepts yes/no and ignores undecided" {
+    const allocator = std.testing.allocator;
+
+    var yes_object = try std.json.ObjectMap.init(allocator, &.{}, &.{});
+    try json_utils.putString(allocator, &yes_object, "trusted", "yes");
+    try json_utils.putBool(allocator, &yes_object, "remember", true);
+    const yes_value: std.json.Value = .{ .object = yes_object };
+    defer tools_common.deinitJsonValue(allocator, yes_value);
+    const yes = parseProjectTrustHookResult(yes_value).?;
+    try std.testing.expect(yes.trusted);
+    try std.testing.expect(yes.remember);
+
+    var no_object = try std.json.ObjectMap.init(allocator, &.{}, &.{});
+    try json_utils.putString(allocator, &no_object, "trusted", "no");
+    const no_value: std.json.Value = .{ .object = no_object };
+    defer tools_common.deinitJsonValue(allocator, no_value);
+    const no = parseProjectTrustHookResult(no_value).?;
+    try std.testing.expect(!no.trusted);
+    try std.testing.expect(!no.remember);
+
+    var undecided_object = try std.json.ObjectMap.init(allocator, &.{}, &.{});
+    try json_utils.putString(allocator, &undecided_object, "trusted", "undecided");
+    const undecided_value: std.json.Value = .{ .object = undecided_object };
+    defer tools_common.deinitJsonValue(allocator, undecided_value);
+    try std.testing.expect(parseProjectTrustHookResult(undecided_value) == null);
+}
+
+test "emitProjectTrustFromHookRuntimes first yes/no wins and isolates errors" {
+    const Fixture = struct {
+        const Self = @This();
+        kind: enum { undecided, fail, yes, after },
+
+        fn hasHook(ptr: *anyopaque, event_name: []const u8) bool {
+            _ = ptr;
+            return std.mem.eql(u8, event_name, "project_trust");
+        }
+
+        fn invoke(
+            ptr: *anyopaque,
+            allocator: std.mem.Allocator,
+            event_name: []const u8,
+            event: std.json.Value,
+            timeout_ms: u64,
+        ) !?std.json.Value {
+            _ = event_name;
+            _ = timeout_ms;
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try std.testing.expectEqualStrings("/work", event.object.get("cwd").?.string);
+            return switch (self.kind) {
+                .undecided => blk: {
+                    var object = try std.json.ObjectMap.init(allocator, &.{}, &.{});
+                    errdefer {
+                        const value: std.json.Value = .{ .object = object };
+                        tools_common.deinitJsonValue(allocator, value);
+                    }
+                    try json_utils.putString(allocator, &object, "trusted", "undecided");
+                    break :blk .{ .object = object };
+                },
+                .fail => error.ExtensionFailed,
+                .yes => blk: {
+                    var object = try std.json.ObjectMap.init(allocator, &.{}, &.{});
+                    errdefer {
+                        const value: std.json.Value = .{ .object = object };
+                        tools_common.deinitJsonValue(allocator, value);
+                    }
+                    try json_utils.putString(allocator, &object, "trusted", "yes");
+                    try json_utils.putBool(allocator, &object, "remember", true);
+                    break :blk .{ .object = object };
+                },
+                .after => @panic("project_trust must stop after the first yes/no"),
+            };
+        }
+
+        fn metadata(ptr: *anyopaque, event_name: []const u8) HookMetadata {
+            _ = ptr;
+            _ = event_name;
+            return .{};
+        }
+
+        fn describeSource(ptr: *anyopaque, allocator: std.mem.Allocator, event_name: []const u8) ![]u8 {
+            _ = ptr;
+            return try allocator.dupe(u8, event_name);
+        }
+
+        fn drainDiagnostics(ptr: *anyopaque, allocator: std.mem.Allocator) ![]HookDiagnostic {
+            _ = ptr;
+            return try allocator.alloc(HookDiagnostic, 0);
+        }
+
+        fn deinit(ptr: *anyopaque) void {
+            _ = ptr;
+        }
+    };
+
+    const vtable: HookRuntime.VTable = .{
+        .has_hook = Fixture.hasHook,
+        .invoke = Fixture.invoke,
+        .metadata = Fixture.metadata,
+        .describe_source = Fixture.describeSource,
+        .drain_diagnostics = Fixture.drainDiagnostics,
+        .deinit = Fixture.deinit,
+    };
+
+    var undecided = Fixture{ .kind = .undecided };
+    var fail = Fixture{ .kind = .fail };
+    var yes = Fixture{ .kind = .yes };
+    var after = Fixture{ .kind = .after };
+    const runtimes = [_]HookRuntime{
+        .{ .ptr = &undecided, .vtable = &vtable },
+        .{ .ptr = &fail, .vtable = &vtable },
+        .{ .ptr = &yes, .vtable = &vtable },
+        .{ .ptr = &after, .vtable = &vtable },
+    };
+
+    const decision = (try emitProjectTrustFromHookRuntimes(
+        std.testing.allocator,
+        &runtimes,
+        "/work",
+        1000,
+    )).?;
+    try std.testing.expect(decision.trusted);
+    try std.testing.expect(decision.remember);
 }

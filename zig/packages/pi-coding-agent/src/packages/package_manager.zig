@@ -59,6 +59,8 @@ pub const ExecuteOptions = struct {
     env_map: ?*const std.process.Environ.Map = null,
     /// Resolved for this command. `executePackageCommand` overwrites this.
     project_trusted: bool = true,
+    /// Optional `project_trust` probe (user/global/CLI extensions). Ignored by `update`.
+    extension_probe: ?project_trust.ExtensionTrustProbe = null,
     fail_settings_write_for_testing: bool = false,
     fail_lockfile_write_for_testing: bool = false,
     fail_policy_write_for_testing: bool = false,
@@ -129,6 +131,7 @@ fn resolvePackageProjectTrusted(
         .agent_dir = options.agent_dir,
         .override = command.project_trust_override,
         .default_project_trust = project_trust.peekDefaultProjectTrust(allocator, io, options.agent_dir),
+        .extension_probe = options.extension_probe,
     });
 }
 
@@ -720,6 +723,72 @@ test "list hides project packages unless the project is trusted" {
     );
     try std.testing.expectEqual(@as(u8, 0), denied.exit_code);
     try std.testing.expect(std.mem.indexOf(u8, denied_out.writer.buffered(), "No packages installed.") != null);
+}
+
+fn packageTrustYes(_: ?*anyopaque, _: []const u8) !?project_trust.ExtensionTrustDecision {
+    return .{ .trusted = true, .remember = false };
+}
+
+test "list uses project_trust extension probe before the trust store" {
+    const allocator = std.testing.allocator;
+    var fixture = try PackageTrustFixture.init(allocator);
+    defer fixture.deinit(allocator);
+    try fixture.writeProjectSettings("{\"packages\":[\"npm:@project/pkg\"]}");
+
+    var options = fixture.executeOptions();
+    options.extension_probe = .{ .func = packageTrustYes };
+
+    var stdout_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stdout_capture.deinit();
+    var stderr_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr_capture.deinit();
+    const result = try runPackageArgs(
+        allocator,
+        &.{"list"},
+        options,
+        &stdout_capture.writer,
+        &stderr_capture.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_capture.writer.buffered(), "Project packages:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_capture.writer.buffered(), "npm:@project/pkg") != null);
+}
+
+test "update ignores project_trust extension probe" {
+    const allocator = std.testing.allocator;
+    var fixture = try PackageTrustFixture.init(allocator);
+    defer fixture.deinit(allocator);
+    try fixture.writeProjectSettings("{\"packages\":[\"npm:@project/pkg\"]}");
+
+    var options = fixture.executeOptions();
+    options.extension_probe = .{ .func = packageTrustYes };
+
+    var stdout_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stdout_capture.deinit();
+    var stderr_capture: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr_capture.deinit();
+    const result = try runPackageArgs(
+        allocator,
+        &.{"list"},
+        options,
+        &stdout_capture.writer,
+        &stderr_capture.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var update_out: std.Io.Writer.Allocating = .init(allocator);
+    defer update_out.deinit();
+    var update_err: std.Io.Writer.Allocating = .init(allocator);
+    defer update_err.deinit();
+    const update = try runPackageArgs(
+        allocator,
+        &.{ "update", "--extensions" },
+        options,
+        &update_out.writer,
+        &update_err.writer,
+    );
+    try std.testing.expectEqual(@as(u8, 0), update.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, update_out.writer.buffered(), "npm:@project/pkg") == null);
 }
 
 test "local config writes fail when the project is untrusted" {

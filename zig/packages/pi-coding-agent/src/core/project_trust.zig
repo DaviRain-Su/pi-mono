@@ -72,6 +72,9 @@ pub const ResolveProjectTrustedOptions = struct {
     default_project_trust: DefaultProjectTrust = .ask,
     has_ui: bool = false,
     extension_probe: ?ExtensionTrustProbe = null,
+    /// Precomputed probe result. When set, `extension_probe` is not called again
+    /// and `needsProjectTrustPrompt` treats trust as already decided.
+    extension_decision: ?ExtensionTrustDecision = null,
 };
 
 pub const UNTRUSTED_PROJECT_WARNING =
@@ -246,10 +249,25 @@ pub fn needsProjectTrustPrompt(
     options: ResolveProjectTrustedOptions,
 ) !bool {
     if (options.override != null) return false;
+    if (options.extension_decision != null) return false;
     if (!try hasTrustRequiringProjectResources(allocator, io, env_map, options.cwd)) return false;
     const store = ProjectTrustStore.init(allocator, io, options.agent_dir);
     if (try store.get(options.cwd) != null) return false;
     return options.default_project_trust == .ask;
+}
+
+/// Matches TypeScript `shouldResolveProjectTrust`: consult user/global/CLI
+/// extensions before reading `trust.json` or prompting, then load project
+/// resources only if the resolved decision is trusted.
+pub fn shouldConsultProjectTrustExtensions(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    cwd: []const u8,
+    override: ?bool,
+) !bool {
+    if (override != null) return false;
+    return try hasTrustRequiringProjectResources(allocator, io, env_map, cwd);
 }
 
 pub fn hasTrustRequiringProjectResources(
@@ -327,6 +345,14 @@ pub fn resolveProjectTrusted(
 ) !bool {
     if (options.override) |value| return value;
     if (!try hasTrustRequiringProjectResources(allocator, io, env_map, options.cwd)) return true;
+
+    if (options.extension_decision) |decision| {
+        if (decision.remember) {
+            const store = ProjectTrustStore.init(allocator, io, options.agent_dir);
+            try store.set(options.cwd, decision.trusted);
+        }
+        return decision.trusted;
+    }
 
     if (options.extension_probe) |probe| {
         if (try probe.func(probe.ctx, options.cwd)) |decision| {
@@ -661,6 +687,16 @@ test "resolveProjectTrusted honors extension probe before the trust store" {
         .default_project_trust = .always,
         .extension_probe = .{ .func = extensionTrustSkip },
     }));
+
+    try store.set(project_dir, false);
+    try std.testing.expect(try resolveProjectTrusted(allocator, std.testing.io, &env_map, .{
+        .cwd = project_dir,
+        .agent_dir = agent_dir,
+        .default_project_trust = .never,
+        .extension_decision = .{ .trusted = true, .remember = false },
+        .extension_probe = .{ .func = extensionTrustSkip },
+    }));
+    try std.testing.expectEqual(false, (try store.get(project_dir)).?);
 }
 
 test "getProjectTrustOptions includes parent and session-only choices" {
@@ -770,6 +806,56 @@ test "needsProjectTrustPrompt is true only for ask with resources and no store e
         .cwd = project_dir,
         .agent_dir = agent_dir,
         .default_project_trust = .ask,
+    }));
+}
+
+test "shouldConsultProjectTrustExtensions skips override and empty projects" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "empty");
+    try tmp.dir.createDirPath(std.testing.io, "project/.pi");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "project/.pi/settings.json",
+        .data = "{}",
+    });
+
+    const empty_dir = try makeTmpPath(allocator, tmp, "empty");
+    defer allocator.free(empty_dir);
+    const project_dir = try makeTmpPath(allocator, tmp, "project");
+    defer allocator.free(project_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", empty_dir);
+
+    try std.testing.expect(!try shouldConsultProjectTrustExtensions(
+        allocator,
+        std.testing.io,
+        &env_map,
+        empty_dir,
+        null,
+    ));
+    try std.testing.expect(!try shouldConsultProjectTrustExtensions(
+        allocator,
+        std.testing.io,
+        &env_map,
+        project_dir,
+        true,
+    ));
+    try std.testing.expect(try shouldConsultProjectTrustExtensions(
+        allocator,
+        std.testing.io,
+        &env_map,
+        project_dir,
+        null,
+    ));
+    try std.testing.expect(!try needsProjectTrustPrompt(allocator, std.testing.io, &env_map, .{
+        .cwd = project_dir,
+        .agent_dir = empty_dir,
+        .default_project_trust = .ask,
+        .extension_decision = .{ .trusted = true },
     }));
 }
 
