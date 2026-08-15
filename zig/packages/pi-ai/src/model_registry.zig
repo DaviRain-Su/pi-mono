@@ -867,6 +867,7 @@ const THINKING_MAP_OFF_UNSUPPORTED = types.ModelThinkingLevelMap{ .off = .unsupp
 const CURATED_PROVIDER_CONFIGS = [_]ProviderConfig{
     .{ .provider = "kimi", .api = "kimi-completions", .base_url = "https://api.moonshot.cn/v1", .default_model_id = "kimi-k2.6" },
     .{ .provider = "openai-responses", .api = "openai-responses", .base_url = "https://api.openai.com/v1", .default_model_id = "gpt-5-mini" },
+    .{ .provider = "radius", .api = "pi-messages", .base_url = "https://radius.pi.dev/v1", .default_model_id = "auto" },
     .{ .provider = "faux", .api = "faux", .base_url = "http://localhost:0", .default_model_id = "faux-1" },
 };
 
@@ -874,6 +875,7 @@ const CURATED_MODELS = [_]ModelDefinition{
     .{ .provider = "kimi", .id = "moonshot-v1-8k", .name = "Moonshot v1 8K", .reasoning = false, .input_types = TEXT_INPUTS[0..], .context_window = 8192, .max_tokens = 8192 },
     .{ .provider = "kimi", .id = "kimi-k2.6", .name = "Kimi K2.6", .reasoning = true, .input_types = TEXT_AND_IMAGE_INPUTS[0..], .context_window = 256000, .max_tokens = 32768 },
     .{ .provider = "openai-responses", .id = "gpt-5-mini", .name = "GPT-5 Mini", .reasoning = true, .thinking_level_map = THINKING_MAP_OFF_UNSUPPORTED, .input_types = TEXT_AND_IMAGE_INPUTS[0..], .context_window = 200000, .max_tokens = 16384 },
+    .{ .provider = "radius", .id = "auto", .name = "Radius Auto", .reasoning = true, .input_types = TEXT_AND_IMAGE_INPUTS[0..], .context_window = 200000, .max_tokens = 16384 },
     .{ .provider = "faux", .id = "faux-1", .name = "Faux 1", .reasoning = false, .input_types = TEXT_INPUTS[0..], .context_window = 8192, .max_tokens = 4096 },
 };
 
@@ -913,6 +915,12 @@ test "built-in models are registered at startup" {
     try std.testing.expect(find("qwen-token-plan", "qwen3.7-max") != null);
     try std.testing.expect(find("qwen-token-plan-cn", "qwen3.7-max") != null);
     try std.testing.expect(find("qwen-token-plan-individual", "qwen3.8-max") != null);
+    try std.testing.expect(find("radius", "auto") != null);
+
+    const radius_provider = getProviderConfig("radius").?;
+    try std.testing.expectEqualStrings("pi-messages", radius_provider.api);
+    try std.testing.expectEqualStrings("https://radius.pi.dev/v1", radius_provider.base_url);
+    try std.testing.expectEqualStrings("auto", radius_provider.default_model_id.?);
 
     const provider = getProviderConfig("openai").?;
     try std.testing.expectEqualStrings("openai-responses", provider.api);

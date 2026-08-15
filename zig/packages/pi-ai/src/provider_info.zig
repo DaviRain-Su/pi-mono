@@ -365,6 +365,14 @@ pub const PROVIDERS: []const ProviderInfo = &.{
         .default_api = "openai-completions",
     },
     .{
+        .id = "radius",
+        .display_name = "Radius",
+        .default_model = "auto",
+        .missing_api_key_message = "Radius credentials required.\nSet RADIUS_API_KEY, pass --api-key, or run /login radius.",
+        .env_var = "RADIUS_API_KEY",
+        .default_api = "pi-messages",
+    },
+    .{
         .id = "together",
         .display_name = "Together AI",
         .default_model = "moonshotai/Kimi-K2.6",

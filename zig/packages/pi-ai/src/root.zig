@@ -70,6 +70,7 @@ pub const providers = struct {
     pub const faux = @import("providers/faux.zig");
     pub const cloudflare = @import("providers/cloudflare.zig");
     pub const github_copilot_headers = @import("providers/github_copilot_headers.zig");
+    pub const radius_config = @import("providers/radius_config.zig");
 
     pub const images = struct {
         pub const register_builtins = @import("providers/images/register_builtins.zig");
@@ -215,6 +216,7 @@ test {
     _ = @import("utils/typebox_helpers.zig");
     _ = @import("utils/validation.zig");
     _ = @import("providers/faux.zig");
+    _ = @import("providers/radius_config.zig");
     _ = @import("providers/images/register_builtins.zig");
     _ = @import("providers/images/openrouter.zig");
     _ = @import("cli.zig");

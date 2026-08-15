@@ -43,6 +43,10 @@ const GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code";
 const GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
+const RADIUS_OAUTH_CLIENT_ID = "pi-gateway";
+const RADIUS_TOKEN_URL = "https://radius.pi.dev/v1/oauth/token";
+const RADIUS_TOKEN_EXPIRY_SKEW_MS: i64 = 60 * std.time.ms_per_s;
+
 const COPILOT_USER_AGENT = "GitHubCopilotChat/0.35.0";
 const COPILOT_EDITOR_VERSION = "vscode/1.107.0";
 const COPILOT_PLUGIN_VERSION = "copilot-chat/0.35.0";
@@ -61,6 +65,7 @@ const OAuthRefreshEndpoints = struct {
     github_copilot_token_url: []const u8 = GITHUB_COPILOT_TOKEN_URL,
     openai_codex_token_url: []const u8 = OPENAI_CODEX_TOKEN_URL,
     xai_token_url: []const u8 = XAI_TOKEN_URL,
+    radius_token_url: []const u8 = RADIUS_TOKEN_URL,
     min_validity_ms: u64 = 0,
 };
 
@@ -136,6 +141,7 @@ pub const API_KEY_LOGIN_PROVIDERS = [_]ProviderInfo{
     apiKeyLoginProvider("qwen-token-plan"),
     apiKeyLoginProvider("qwen-token-plan-cn"),
     apiKeyLoginProvider("qwen-token-plan-individual"),
+    apiKeyLoginProvider("radius"),
     apiKeyLoginProvider("together"),
     apiKeyLoginProvider("vercel-ai-gateway"),
     apiKeyLoginProvider("xai"),
@@ -1552,6 +1558,9 @@ fn refreshOAuthCredentialWithEndpoints(
     if (std.mem.eql(u8, provider_id, "xai-oauth")) {
         return refreshXAIStoredTokenWithUrl(allocator, io, credential.refresh, endpoints.xai_token_url);
     }
+    if (std.mem.eql(u8, provider_id, "radius")) {
+        return refreshRadiusStoredTokenWithUrl(allocator, io, credential.refresh, endpoints.radius_token_url);
+    }
     _ = env_map;
     return error.UnsupportedProvider;
 }
@@ -1620,6 +1629,26 @@ fn refreshXAIStoredTokenWithUrl(
     const response_body = try postForm(allocator, io, token_url, body, null);
     defer allocator.free(response_body);
     return parseOAuthRefreshResponse(allocator, io, response_body, .exact);
+}
+
+fn refreshRadiusStoredTokenWithUrl(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    refresh_token: []const u8,
+    token_url: []const u8,
+) !OAuthCredential {
+    const body = try buildFormBody(allocator, &.{
+        .{ .name = "grant_type", .value = "refresh_token" },
+        .{ .name = "refresh_token", .value = refresh_token },
+        .{ .name = "client_id", .value = RADIUS_OAUTH_CLIENT_ID },
+    });
+    defer allocator.free(body);
+
+    const response_body = try postForm(allocator, io, token_url, body, null);
+    defer allocator.free(response_body);
+    var credential = try parseOAuthRefreshResponse(allocator, io, response_body, .exact);
+    credential.expires -= RADIUS_TOKEN_EXPIRY_SKEW_MS;
+    return credential;
 }
 
 const RefreshExpiryMode = enum {
@@ -2469,6 +2498,20 @@ test "valid stored OAuth credentials resolve without refresh for supported famil
     )).?;
     defer allocator.free(xai_key);
     try std.testing.expectEqualStrings("xai-access", xai_key);
+
+    var radius = try makeOAuthTestObject(allocator, "radius-access", "radius-refresh", future_expires, null);
+    defer deinitOAuthTestObject(allocator, &radius);
+    const radius_key = (try buildApiKeyFromStoredEntryWithRefreshEndpoints(
+        allocator,
+        io,
+        &env_map,
+        null,
+        "radius",
+        radius,
+        .{ .radius_token_url = "http://127.0.0.1:1" },
+    )).?;
+    defer allocator.free(radius_key);
+    try std.testing.expectEqualStrings("radius-access", radius_key);
 }
 
 test "near-expiry OAuth credentials refresh when min validity is not met" {
@@ -2611,12 +2654,32 @@ test "expired stored OAuth credentials refresh before use and persist refreshed 
     defer allocator.free(xai_key);
     try std.testing.expectEqualStrings("xai-new", xai_key);
 
+    var radius_server = try ai.provider_error.TestStatusServer.init(io, 200, "OK", "", "{\"access_token\":\"radius-new\",\"refresh_token\":\"radius-refresh-new\",\"expires_in\":3600}");
+    defer radius_server.deinit();
+    try radius_server.start();
+    const radius_url = try radius_server.url(allocator);
+    defer allocator.free(radius_url);
+    var radius = try makeOAuthTestObject(allocator, "radius-old", "radius-refresh-old", 0, null);
+    defer deinitOAuthTestObject(allocator, &radius);
+    const radius_key = (try buildApiKeyFromStoredEntryWithRefreshEndpoints(
+        allocator,
+        io,
+        &env_map,
+        auth_path,
+        "radius",
+        radius,
+        .{ .radius_token_url = radius_url },
+    )).?;
+    defer allocator.free(radius_key);
+    try std.testing.expectEqualStrings("radius-new", radius_key);
+
     const persisted = try std.Io.Dir.readFileAlloc(.cwd(), io, auth_path, allocator, .limited(1024 * 1024));
     defer allocator.free(persisted);
     try std.testing.expect(std.mem.indexOf(u8, persisted, "anthropic-new") != null);
     try std.testing.expect(std.mem.indexOf(u8, persisted, "copilot-new") != null);
     try std.testing.expect(std.mem.indexOf(u8, persisted, codex_access) != null);
     try std.testing.expect(std.mem.indexOf(u8, persisted, "xai-new") != null);
+    try std.testing.expect(std.mem.indexOf(u8, persisted, "radius-new") != null);
 }
 
 test "isApiKeyLoginProvider keeps built-in API key providers separate from OAuth-only providers" {
@@ -2653,6 +2716,7 @@ test "API key login metadata includes provider catalog parity providers" {
         .{ .provider = "qwen-token-plan", .display_name = "Qwen Token Plan" },
         .{ .provider = "qwen-token-plan-cn", .display_name = "Qwen Token Plan CN" },
         .{ .provider = "qwen-token-plan-individual", .display_name = "Qwen Token Plan Individual" },
+        .{ .provider = "radius", .display_name = "Radius" },
     };
 
     const oauth_provider_ids = [_][]const u8{ "anthropic", "github-copilot" };

@@ -159,6 +159,7 @@ test "resolveEnvVar returns previously-known single-key mappings" {
         .{ .provider = "qwen-token-plan", .env_var = "QWEN_TOKEN_PLAN_API_KEY" },
         .{ .provider = "qwen-token-plan-cn", .env_var = "QWEN_TOKEN_PLAN_CN_API_KEY" },
         .{ .provider = "qwen-token-plan-individual", .env_var = "QWEN_TOKEN_PLAN_API_KEY" },
+        .{ .provider = "radius", .env_var = "RADIUS_API_KEY" },
     };
 
     for (known) |entry| {
@@ -220,6 +221,7 @@ test "getEnvApiKey resolves known providers and returns null when missing" {
     try env_map.put("BASETEN_API_KEY", "baseten-key");
     try env_map.put("QWEN_TOKEN_PLAN_API_KEY", "qwen-key");
     try env_map.put("QWEN_TOKEN_PLAN_CN_API_KEY", "qwen-cn-key");
+    try env_map.put("RADIUS_API_KEY", "radius-key");
     try env_map.put("COPILOT_GITHUB_TOKEN", "copilot-token");
     try env_map.put("GH_TOKEN", "gh-token");
     try env_map.put("GITHUB_TOKEN", "github-token");
@@ -269,6 +271,7 @@ test "getEnvApiKey resolves known providers and returns null when missing" {
         .{ .provider = "qwen-token-plan", .expected = "qwen-key" },
         .{ .provider = "qwen-token-plan-cn", .expected = "qwen-cn-key" },
         .{ .provider = "qwen-token-plan-individual", .expected = "qwen-key" },
+        .{ .provider = "radius", .expected = "radius-key" },
         .{ .provider = "github-copilot", .expected = "copilot-token" },
         .{ .provider = "anthropic", .expected = "anthropic-oauth-token" },
         .{ .provider = "amazon-bedrock", .expected = AUTHENTICATED_SENTINEL },
