@@ -61,6 +61,7 @@ const OAuthRefreshEndpoints = struct {
     github_copilot_token_url: []const u8 = GITHUB_COPILOT_TOKEN_URL,
     openai_codex_token_url: []const u8 = OPENAI_CODEX_TOKEN_URL,
     xai_token_url: []const u8 = XAI_TOKEN_URL,
+    min_validity_ms: u64 = 0,
 };
 
 pub const OAuthClientCredentials = struct {
@@ -670,6 +671,26 @@ pub fn buildApiKeyFromStoredEntryRefreshing(
     provider_id: []const u8,
     object: std.json.ObjectMap,
 ) !?[]u8 {
+    return buildApiKeyFromStoredEntryRefreshingWithMinValidity(
+        allocator,
+        io,
+        env_map,
+        auth_path,
+        provider_id,
+        object,
+        0,
+    );
+}
+
+pub fn buildApiKeyFromStoredEntryRefreshingWithMinValidity(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    auth_path: []const u8,
+    provider_id: []const u8,
+    object: std.json.ObjectMap,
+    min_validity_ms: u64,
+) !?[]u8 {
     return buildApiKeyFromStoredEntryWithRefreshEndpoints(
         allocator,
         io,
@@ -677,7 +698,7 @@ pub fn buildApiKeyFromStoredEntryRefreshing(
         auth_path,
         provider_id,
         object,
-        .{},
+        .{ .min_validity_ms = min_validity_ms },
     );
 }
 
@@ -701,7 +722,7 @@ fn buildApiKeyFromStoredEntryWithRefreshEndpoints(
             defer credential.deinit(allocator);
 
             if (getObjectInt(object, "expires")) |expires| {
-                if (currentTimeMs(io) >= expires) {
+                if (oauthNeedsRefresh(currentTimeMs(io), expires, endpoints.min_validity_ms)) {
                     if (credential.refresh.len == 0) return null;
                     var refreshed = refreshOAuthCredentialWithEndpoints(
                         allocator,
@@ -1835,6 +1856,12 @@ fn computeExpiresAtMs(expires_in_seconds: i64, io: std.Io) i64 {
     return currentTimeMs(io) + expires_in_seconds * std.time.ms_per_s - 5 * std.time.ms_per_min;
 }
 
+fn oauthNeedsRefresh(now_ms: i64, expires_ms: i64, min_validity_ms: u64) bool {
+    const extra = std.math.cast(i64, min_validity_ms) orelse std.math.maxInt(i64);
+    const threshold = now_ms + extra;
+    return threshold >= expires_ms;
+}
+
 fn currentTimeMs(io: std.Io) i64 {
     return @intCast(@divFloor(std.Io.Clock.now(.awake, io).nanoseconds, std.time.ns_per_ms));
 }
@@ -2442,6 +2469,45 @@ test "valid stored OAuth credentials resolve without refresh for supported famil
     )).?;
     defer allocator.free(xai_key);
     try std.testing.expectEqualStrings("xai-access", xai_key);
+}
+
+test "near-expiry OAuth credentials refresh when min validity is not met" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const soon_expires = currentTimeMs(io) + 10 * std.time.ms_per_min;
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+
+    var still_valid = try makeOAuthTestObject(allocator, "anthropic-access", "anthropic-refresh", soon_expires, null);
+    defer deinitOAuthTestObject(allocator, &still_valid);
+    const current_key = (try buildApiKeyFromStoredEntryWithRefreshEndpoints(
+        allocator,
+        io,
+        &env_map,
+        null,
+        "anthropic",
+        still_valid,
+        .{ .anthropic_token_url = "http://127.0.0.1:1" },
+    )).?;
+    defer allocator.free(current_key);
+    try std.testing.expectEqualStrings("anthropic-access", current_key);
+
+    var needs_refresh = try makeOAuthTestObject(allocator, "anthropic-access", "anthropic-refresh", soon_expires, null);
+    defer deinitOAuthTestObject(allocator, &needs_refresh);
+    const refreshed = try buildApiKeyFromStoredEntryWithRefreshEndpoints(
+        allocator,
+        io,
+        &env_map,
+        null,
+        "anthropic",
+        needs_refresh,
+        .{
+            .anthropic_token_url = "http://127.0.0.1:1",
+            .min_validity_ms = 30 * 60_000,
+        },
+    );
+    try std.testing.expect(refreshed == null);
 }
 
 test "expired stored OAuth credentials refresh before use and persist refreshed tokens" {

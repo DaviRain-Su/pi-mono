@@ -1,6 +1,8 @@
 const std = @import("std");
 const cli = @import("args.zig");
 
+pub const DEFAULT_BEARER_TOKEN_MIN_EXPIRY_MS: u64 = 30 * 60_000;
+
 pub const AuthCommandKind = enum {
     check,
     api_key,

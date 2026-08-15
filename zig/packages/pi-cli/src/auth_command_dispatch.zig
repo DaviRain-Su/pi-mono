@@ -118,7 +118,6 @@ fn printCredential(
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !u8 {
-    _ = min_expiry_ms;
     var stored = try loadStoredEntry(allocator, io, auth_path, provider);
     defer if (stored) |*value| value.deinit(allocator);
 
@@ -148,7 +147,16 @@ fn printCredential(
     }
 
     if (stored) |value| {
-        const token = try auth.buildApiKeyFromStoredEntryRefreshing(allocator, io, env_map, auth_path, provider, value.entry);
+        const min_validity_ms = min_expiry_ms orelse auth_command.DEFAULT_BEARER_TOKEN_MIN_EXPIRY_MS;
+        const token = try auth.buildApiKeyFromStoredEntryRefreshingWithMinValidity(
+            allocator,
+            io,
+            env_map,
+            auth_path,
+            provider,
+            value.entry,
+            min_validity_ms,
+        );
         if (token) |access| {
             defer allocator.free(access);
             try stdout.print("{s}\n", .{access});
