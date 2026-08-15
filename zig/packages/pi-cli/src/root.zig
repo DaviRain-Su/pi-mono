@@ -1,4 +1,6 @@
 pub const args = @import("args.zig");
+pub const auth_command = @import("auth_command.zig");
+pub const auth_command_dispatch = @import("auth_command_dispatch.zig");
 pub const bootstrap = @import("bootstrap.zig");
 pub const config_selector = @import("config_selector.zig");
 pub const package_command_dispatch = @import("package_command_dispatch.zig");
@@ -17,6 +19,8 @@ pub const test_harness = @import("test_harness.zig");
 
 test {
     _ = args;
+    _ = auth_command;
+    _ = auth_command_dispatch;
     _ = bootstrap;
     _ = config_selector;
     _ = package_command_dispatch;

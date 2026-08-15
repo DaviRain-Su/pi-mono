@@ -94,6 +94,17 @@ fn runCliWithInput(
         return exit_code;
     }
 
+    if (try cli_mod.auth_command_dispatch.dispatchAuthCommand(
+        allocator,
+        io,
+        env_map,
+        argv,
+        stdout,
+        stderr,
+    )) |exit_code| {
+        return exit_code;
+    }
+
     var options = bootstrap.parseArgs(allocator, argv) catch |err| {
         try stderr.print("Error: {s}\n\n", .{bootstrap.parseErrorMessage(err)});
         try output.printUsage(allocator, VERSION, stdout);
