@@ -33,6 +33,7 @@ pub const SlashCommandKind = enum {
     session,
     changelog,
     tree,
+    trust,
     fork,
     clone,
     compact,
@@ -81,6 +82,7 @@ pub const BUILTIN_SLASH_COMMANDS = [_]BuiltinSlashCommand{
     .{ .kind = .fork, .name = "fork", .description = "Create a new fork from a previous user message" },
     .{ .kind = .clone, .name = "clone", .description = "Duplicate the current session at the current position" },
     .{ .kind = .tree, .name = "tree", .description = "Navigate session tree (switch branches)" },
+    .{ .kind = .trust, .name = "trust", .description = "Save project trust decision for future sessions", .argument_hint = "[yes|no|parent]" },
     .{ .kind = .login, .name = "login", .description = "Configure provider authentication" },
     .{ .kind = .logout, .name = "logout", .description = "Remove provider authentication" },
     .{ .kind = .new, .name = "new", .description = "Start a new session" },
@@ -186,7 +188,7 @@ pub fn handleSlashCommand(
     )) return;
 
     switch (command.kind) {
-        .help, .settings, .model, .theme, .scoped_models, .share, .copy, .name, .hotkeys, .label, .session, .changelog => unreachable,
+        .help, .settings, .model, .theme, .scoped_models, .share, .copy, .name, .hotkeys, .label, .session, .changelog, .trust => unreachable,
         .import => {
             if (try blockDuringActivePrompt(prompt_worker_active, app_state, "wait for the current response to finish before importing a session")) return;
             try slash_commands.handleImportSlashCommand(
@@ -332,6 +334,7 @@ fn handleImmediateSlashCommand(
         .label => try slash_commands.handleLabelSlashCommand(allocator, session, command.argument, app_state),
         .session => try slash_commands.handleSessionSlashCommand(allocator, session, app_state),
         .changelog => try slash_commands.handleChangelogSlashCommand(allocator, io, session, command.argument, app_state),
+        .trust => try slash_commands.handleTrustSlashCommand(allocator, io, options.cwd, command.argument, app_state, live_resources),
         else => return false,
     }
     return true;
@@ -361,6 +364,7 @@ test "built-in slash command autocomplete matrix keeps help before TypeScript or
         "fork",
         "clone",
         "tree",
+        "trust",
         "login",
         "logout",
         "new",

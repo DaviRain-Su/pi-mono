@@ -12,6 +12,7 @@ const extension_runtime = @import("coding_agent").extension_runtime;
 const coding_agent = @import("coding_agent");
 const tool_adapters = @import("coding_agent").tool_adapters;
 const tool_selection = @import("coding_agent").tool_selection;
+const project_trust = @import("coding_agent").project_trust;
 
 pub const PreparedCliRuntime = struct {
     runtime_config: config_mod.RuntimeConfig,
@@ -59,7 +60,7 @@ pub fn prepareCliRuntime(
         io,
         env_map,
         cwd,
-        runtimeConfigLoadOptions(options, env_map),
+        try runtimeConfigLoadOptions(allocator, io, env_map, cwd, options),
     );
     errdefer runtime_config.deinit();
     const effective_tools = selected_tools.withDefaultBuiltins(runtime_config.defaultTools());
@@ -79,6 +80,7 @@ pub fn prepareCliRuntime(
         .include_default_skills = !options.no_skills,
         .include_default_prompts = !options.no_prompt_templates,
         .include_default_themes = !options.no_themes,
+        .project_trusted = runtime_config.project_trusted,
     });
     errdefer resource_bundle.deinit(allocator);
 
@@ -110,6 +112,7 @@ pub fn prepareCliRuntime(
             .include_default_prompts = !options.no_prompt_templates,
             .include_default_themes = !options.no_themes,
             .extension_discoveries = extension_contributions.resource_discoveries,
+            .project_trusted = runtime_config.project_trusted,
         });
         resource_bundle.deinit(allocator);
         resource_bundle = discovered_bundle;
@@ -278,11 +281,24 @@ pub fn refreshSystemPromptWithActiveTools(
 }
 
 pub fn runtimeConfigLoadOptions(
-    options: *const cli.Args,
+    allocator: std.mem.Allocator,
+    io: std.Io,
     env_map: *const std.process.Environ.Map,
-) config_mod.RuntimeConfigLoadOptions {
+    cwd: []const u8,
+    options: *const cli.Args,
+) !config_mod.RuntimeConfigLoadOptions {
+    const agent_dir = try config_mod.resolveAgentDir(allocator, env_map);
+    defer allocator.free(agent_dir);
+    const default_trust = project_trust.peekDefaultProjectTrust(allocator, io, agent_dir);
+    const project_trusted = try project_trust.resolveProjectTrusted(allocator, io, env_map, .{
+        .cwd = cwd,
+        .agent_dir = agent_dir,
+        .override = options.project_trust_override,
+        .default_project_trust = default_trust,
+    });
     return .{
         .discover_models = bootstrap.startupNetworkOperationsEnabled(options, env_map),
+        .project_trusted = project_trusted,
     };
 }
 
@@ -487,7 +503,7 @@ test "runtimeConfigLoadOptions disables model discovery for offline CLI flag" {
     var args = try cli.parseArgs(allocator, &.{"--offline"});
     defer args.deinit(allocator);
 
-    const options = runtimeConfigLoadOptions(&args, &env_map);
+    const options = try runtimeConfigLoadOptions(allocator, std.testing.io, &env_map, "/tmp/project", &args);
     try std.testing.expect(!options.discover_models);
 }
 
@@ -501,7 +517,7 @@ test "runtimeConfigLoadOptions disables model discovery for PI_OFFLINE" {
     var args = try cli.parseArgs(allocator, &.{});
     defer args.deinit(allocator);
 
-    const options = runtimeConfigLoadOptions(&args, &env_map);
+    const options = try runtimeConfigLoadOptions(allocator, std.testing.io, &env_map, "/tmp/project", &args);
     try std.testing.expect(!options.discover_models);
 }
 
@@ -514,7 +530,7 @@ test "runtimeConfigLoadOptions keeps model discovery enabled by default" {
     var args = try cli.parseArgs(allocator, &.{});
     defer args.deinit(allocator);
 
-    const options = runtimeConfigLoadOptions(&args, &env_map);
+    const options = try runtimeConfigLoadOptions(allocator, std.testing.io, &env_map, "/tmp/project", &args);
     try std.testing.expect(options.discover_models);
 }
 

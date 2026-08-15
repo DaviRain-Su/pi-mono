@@ -80,6 +80,7 @@ pub const Args = struct {
     exclude_tools: ?[]const []const u8 = null,
     use_theme: ?[]const u8 = null,
     tui_mode: ?TuiMode = null,
+    project_trust_override: ?bool = null,
     no_tools: bool = false,
     no_builtin_tools: bool = false,
     no_context_files: bool = false,
@@ -261,6 +262,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) ParseAr
             i += 1;
             if (i >= argv.len) return error.MissingOptionValue;
             result.tui_mode = parseTuiMode(argv[i]) orelse return error.InvalidTuiMode;
+        } else if (std.mem.eql(u8, arg, "--approve") or std.mem.eql(u8, arg, "-a")) {
+            result.project_trust_override = true;
+        } else if (std.mem.eql(u8, arg, "--no-approve") or std.mem.eql(u8, arg, "-na")) {
+            result.project_trust_override = false;
         } else if (std.mem.eql(u8, arg, "--no-tools") or std.mem.eql(u8, arg, "-nt")) {
             result.no_tools = true;
         } else if (std.mem.eql(u8, arg, "--no-builtin-tools") or std.mem.eql(u8, arg, "-nbt")) {
@@ -509,6 +514,8 @@ fn renderBaseHelp(allocator: std.mem.Allocator, version: []const u8) ![]u8 {
         \\  --exclude-tools, -xt <names>   Comma-separated denylist of tool names to disable
         \\  --use-theme <name>             Set the initial interactive theme for this run
         \\  --tui-mode <mode>              TUI mode: regular (default) or fullscreen
+        \\  --approve, -a                  Trust project-local files for this run
+        \\  --no-approve, -na              Ignore project-local files for this run
         \\  --no-tools, -nt                Disable built-in tools by default
         \\  --no-builtin-tools, -nbt       Disable built-in tools by default but keep custom tools enabled
         \\  --system-prompt <text>         Replace the default system prompt
@@ -709,6 +716,18 @@ test "parse args accepts session id, name, exclude-tools, theme, and tui-mode" {
     try std.testing.expectEqualStrings("grep", args.exclude_tools.?[1]);
     try std.testing.expectEqualStrings("codex", args.use_theme.?);
     try std.testing.expectEqual(TuiMode.fullscreen, args.tui_mode.?);
+}
+
+test "parse args accepts project trust overrides" {
+    const allocator = std.testing.allocator;
+
+    var approve = try parseArgs(allocator, &.{ "--approve" });
+    defer approve.deinit(allocator);
+    try std.testing.expectEqual(true, approve.project_trust_override.?);
+
+    var no_approve = try parseArgs(allocator, &.{ "-na" });
+    defer no_approve.deinit(allocator);
+    try std.testing.expectEqual(false, no_approve.project_trust_override.?);
 }
 
 test "parse args accepts TS RPC mode" {
@@ -991,6 +1010,8 @@ test "help text mentions expected flags" {
     try std.testing.expect(std.mem.indexOf(u8, help, "--exclude-tools, -xt <names>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--use-theme <name>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--tui-mode <mode>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--approve, -a") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--no-approve, -na") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--no-tools, -nt") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--no-builtin-tools, -nbt") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--no-context-files, -nc") != null);

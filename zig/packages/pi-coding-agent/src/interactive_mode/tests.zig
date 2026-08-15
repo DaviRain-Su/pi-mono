@@ -1422,6 +1422,10 @@ test "parseSlashCommand recognizes builtins and arguments" {
     try std.testing.expectEqual(SlashCommandKind.@"export", export_command.kind);
     try std.testing.expectEqualStrings("\"/tmp/out.md\"", export_command.argument.?);
 
+    const trust_command = parseSlashCommand("/trust parent").?;
+    try std.testing.expectEqual(SlashCommandKind.trust, trust_command.kind);
+    try std.testing.expectEqualStrings("parent", trust_command.argument.?);
+
     try std.testing.expect(parseSlashCommand("hello") == null);
     try std.testing.expect(parseSlashCommand("/unknown") == null);
 }

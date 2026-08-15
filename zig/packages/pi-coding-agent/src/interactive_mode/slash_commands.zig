@@ -43,6 +43,7 @@ const AppState = rendering.AppState;
 const rebuildAppStateFromSession = rendering.rebuildAppStateFromSession;
 const updateAppFooterFromSession = rendering.updateAppFooterFromSession;
 const session_lifecycle = @import("session_lifecycle.zig");
+const project_trust = @import("../core/project_trust.zig");
 const createSeededSession = session_lifecycle.createSeededSession;
 const switchSession = session_lifecycle.switchSession;
 const formatSessionInfo = session_lifecycle.formatSessionInfo;
@@ -932,6 +933,67 @@ pub fn handleNameSlashCommand(
     const message = try std.fmt.allocPrint(allocator, "Session name set: {s}", .{currentSessionLabel(session)});
     defer allocator.free(message);
     try app_state.appendInfo(message);
+}
+
+pub fn handleTrustSlashCommand(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    cwd: []const u8,
+    argument: ?[]const u8,
+    app_state: *AppState,
+    live_resources: *LiveResources,
+) !void {
+    const runtime_config = live_resources.runtime_config orelse {
+        try app_state.appendError("Project trust is unavailable without runtime config");
+        return;
+    };
+    const store = project_trust.ProjectTrustStore.init(allocator, io, runtime_config.agent_dir);
+    const current = try store.get(cwd);
+    const session_trusted = runtime_config.isProjectTrusted();
+
+    const action = argument orelse {
+        const saved = if (current) |trusted|
+            if (trusted) "trusted" else "untrusted"
+        else
+            "none";
+        const message = try std.fmt.allocPrint(
+            allocator,
+            "Project trust: saved {s}, this session {s}. Use /trust yes, /trust no, or /trust parent, then restart pi.",
+            .{ saved, if (session_trusted) "trusted" else "untrusted" },
+        );
+        defer allocator.free(message);
+        try app_state.appendInfo(message);
+        return;
+    };
+
+    if (std.ascii.eqlIgnoreCase(action, "yes") or std.ascii.eqlIgnoreCase(action, "trust")) {
+        try store.set(cwd, true);
+        try app_state.appendInfo("Saved trust for this project. Restart pi for the decision to take effect.");
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(action, "no") or std.ascii.eqlIgnoreCase(action, "never")) {
+        try store.set(cwd, false);
+        try app_state.appendInfo("Saved do-not-trust for this project. Restart pi for the decision to take effect.");
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(action, "parent")) {
+        const parent_path = try project_trust.getProjectTrustParentPath(allocator, cwd);
+        defer if (parent_path) |path| allocator.free(path);
+        const parent = parent_path orelse {
+            try app_state.appendError("This folder has no parent path to trust");
+            return;
+        };
+        try store.setMany(&.{
+            .{ .path = parent, .decision = true },
+            .{ .path = cwd, .decision = null },
+        });
+        const message = try std.fmt.allocPrint(allocator, "Saved trust for parent folder {s}. Restart pi for the decision to take effect.", .{parent});
+        defer allocator.free(message);
+        try app_state.appendInfo(message);
+        return;
+    }
+
+    try app_state.appendError("Usage: /trust [yes|no|parent]");
 }
 
 pub fn handleLabelSlashCommand(

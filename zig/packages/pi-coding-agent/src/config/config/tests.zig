@@ -200,6 +200,92 @@ test "runtime config loads defaultTools and lets project settings replace them" 
     }
 }
 
+test "runtime config reads defaultProjectTrust from global settings only" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "home/.pi/agent");
+    try tmp.dir.createDirPath(std.testing.io, "project/.pi");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "home/.pi/agent/settings.json",
+        .data =
+        \\{
+        \\  "defaultProjectTrust": "always"
+        \\}
+        ,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "project/.pi/settings.json",
+        .data =
+        \\{
+        \\  "defaultProjectTrust": "never"
+        \\}
+        ,
+    });
+
+    const home_dir = try makeTmpPath(allocator, tmp, "home");
+    defer allocator.free(home_dir);
+    const project_dir = try makeTmpPath(allocator, tmp, "project");
+    defer allocator.free(project_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_dir);
+
+    var runtime = try loadRuntimeConfig(allocator, std.testing.io, &env_map, project_dir);
+    defer runtime.deinit();
+    defer ai.model_registry.resetForTesting();
+
+    try std.testing.expectEqual(config.DefaultProjectTrust.always, runtime.defaultProjectTrust());
+}
+
+test "runtime config skips project settings when the project is untrusted" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "home/.pi/agent");
+    try tmp.dir.createDirPath(std.testing.io, "project/.pi");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "home/.pi/agent/settings.json",
+        .data =
+        \\{
+        \\  "defaultProvider": "openai"
+        \\}
+        ,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "project/.pi/settings.json",
+        .data =
+        \\{
+        \\  "defaultProvider": "faux"
+        \\}
+        ,
+    });
+
+    const home_dir = try makeTmpPath(allocator, tmp, "home");
+    defer allocator.free(home_dir);
+    const project_dir = try makeTmpPath(allocator, tmp, "project");
+    defer allocator.free(project_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_dir);
+
+    var runtime = try loadRuntimeConfigWithOptions(allocator, std.testing.io, &env_map, project_dir, .{
+        .discover_models = false,
+        .project_trusted = false,
+    });
+    defer runtime.deinit();
+    defer ai.model_registry.resetForTesting();
+
+    try std.testing.expectEqualStrings("openai", runtime.settings.default_provider.?);
+    try std.testing.expect(!runtime.isProjectTrusted());
+}
+
 test "runtime config parses merges and looks up extension policies" {
     const allocator = std.testing.allocator;
     const identity_a = "typescript:local:project:/tmp/policy-a.ts";

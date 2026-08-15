@@ -8,8 +8,11 @@ const config_errors = @import("config_errors.zig");
 const capability = @import("../extensions/capability.zig");
 const keybindings_mod = @import("../shared/keybindings.zig");
 const migrations = @import("migrations.zig");
+const project_trust = @import("../core/project_trust.zig");
 const resources_mod = @import("../resources/resources.zig");
 const session_mod = @import("../sessions/session.zig");
+
+pub const DefaultProjectTrust = project_trust.DefaultProjectTrust;
 
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 16384;
@@ -102,6 +105,7 @@ pub const Settings = struct {
     default_model: ?[]u8 = null,
     enabled_models: ?[]const []const u8 = null,
     default_tools: ?[]const []const u8 = null,
+    default_project_trust: ?DefaultProjectTrust = null,
     default_thinking_level: ?agent.ThinkingLevel = null,
     transport: ?ai.types.Transport = null,
     steering_mode: ?QueueModeSetting = null,
@@ -160,6 +164,7 @@ pub const Settings = struct {
             .default_model = if (self.default_model) |value| try allocator.dupe(u8, value) else null,
             .enabled_models = try cloneStringList(allocator, self.enabled_models),
             .default_tools = try cloneStringList(allocator, self.default_tools),
+            .default_project_trust = self.default_project_trust,
             .default_thinking_level = self.default_thinking_level,
             .transport = self.transport,
             .steering_mode = self.steering_mode,
@@ -206,6 +211,7 @@ pub const RuntimeConfig = struct {
     provider_api_keys: std.StringHashMap([]const u8),
     keybindings: keybindings_mod.Keybindings,
     errors: []ConfigError = &.{},
+    project_trusted: bool = true,
 
     pub fn deinit(self: *RuntimeConfig) void {
         self.allocator.free(self.agent_dir);
@@ -297,6 +303,15 @@ pub const RuntimeConfig = struct {
         return self.settings.default_tools;
     }
 
+    /// Mirrors TS `settingsManager.getDefaultProjectTrust()`: global only.
+    pub fn defaultProjectTrust(self: *const RuntimeConfig) DefaultProjectTrust {
+        return self.global_settings.default_project_trust orelse .ask;
+    }
+
+    pub fn isProjectTrusted(self: *const RuntimeConfig) bool {
+        return self.project_trusted;
+    }
+
     pub fn warningAnthropicExtraUsage(self: *const RuntimeConfig) bool {
         return self.settings.warning_anthropic_extra_usage orelse true;
     }
@@ -352,6 +367,7 @@ pub const RuntimeConfig = struct {
 
 pub const RuntimeConfigLoadOptions = struct {
     discover_models: bool = true,
+    project_trusted: bool = true,
 };
 
 pub fn loadRuntimeConfig(
@@ -394,7 +410,10 @@ pub fn loadRuntimeConfigWithOptions(
 
     var global_settings = try loadSettingsFile(allocator, io, global_settings_path, &errors, .settings);
     errdefer global_settings.deinit(allocator);
-    var project_settings = try loadSettingsFile(allocator, io, project_settings_path, &errors, .settings);
+    var project_settings = if (options.project_trusted)
+        try loadSettingsFile(allocator, io, project_settings_path, &errors, .settings)
+    else
+        Settings{};
     errdefer project_settings.deinit(allocator);
     var settings = try mergeSettings(allocator, global_settings, project_settings);
     errdefer settings.deinit(allocator);
@@ -424,6 +443,7 @@ pub fn loadRuntimeConfigWithOptions(
         .provider_api_keys = provider_api_keys,
         .keybindings = keybindings,
         .errors = owned_errors,
+        .project_trusted = options.project_trusted,
     };
 }
 
@@ -493,6 +513,7 @@ const SettingFieldKind = enum {
     queue_mode,
     double_escape_action,
     tree_filter_mode,
+    default_project_trust,
     string_list,
 };
 
@@ -512,6 +533,7 @@ const TOP_LEVEL_SETTINGS: []const SettingFieldSpec = &.{
     .{ .json_key = "defaultModel", .field = "default_model", .kind = .string_alloc },
     .{ .json_key = "enabledModels", .field = "enabled_models", .kind = .string_list },
     .{ .json_key = "defaultTools", .field = "default_tools", .kind = .string_list },
+    .{ .json_key = "defaultProjectTrust", .field = "default_project_trust", .kind = .default_project_trust },
     .{ .json_key = "defaultThinkingLevel", .field = "default_thinking_level", .kind = .thinking_level },
     .{ .json_key = "transport", .field = "transport", .kind = .transport },
     .{ .json_key = "steeringMode", .field = "steering_mode", .kind = .queue_mode },
@@ -612,6 +634,9 @@ fn applySettingFromJson(
         },
         .tree_filter_mode => {
             if (value == .string) @field(settings, spec.field) = parseTreeFilterMode(value.string);
+        },
+        .default_project_trust => {
+            if (value == .string) @field(settings, spec.field) = DefaultProjectTrust.parse(value.string);
         },
         .string_list => {
             @field(settings, spec.field) = try parseStringList(allocator, value);

@@ -75,30 +75,32 @@ pub fn resolveConfiguredResources(
     var themes = std.ArrayList(ResolvedResource).empty;
     errdefer deinitResolvedList(allocator, &themes);
 
-    try addLocalEntries(allocator, io, &extensions, &diagnostics, options.project.extensions, .extension, .{
-        .source = "local",
-        .scope = .project,
-        .origin = .top_level,
-        .base_dir = project_base_dir,
-    });
-    try addLocalEntries(allocator, io, &skills, &diagnostics, options.project.skills, .skill, .{
-        .source = "local",
-        .scope = .project,
-        .origin = .top_level,
-        .base_dir = project_base_dir,
-    });
-    try addLocalEntries(allocator, io, &prompts, &diagnostics, options.project.prompts, .prompt, .{
-        .source = "local",
-        .scope = .project,
-        .origin = .top_level,
-        .base_dir = project_base_dir,
-    });
-    try addLocalEntries(allocator, io, &themes, &diagnostics, options.project.themes, .theme, .{
-        .source = "local",
-        .scope = .project,
-        .origin = .top_level,
-        .base_dir = project_base_dir,
-    });
+    if (options.project_trusted) {
+        try addLocalEntries(allocator, io, &extensions, &diagnostics, options.project.extensions, .extension, .{
+            .source = "local",
+            .scope = .project,
+            .origin = .top_level,
+            .base_dir = project_base_dir,
+        });
+        try addLocalEntries(allocator, io, &skills, &diagnostics, options.project.skills, .skill, .{
+            .source = "local",
+            .scope = .project,
+            .origin = .top_level,
+            .base_dir = project_base_dir,
+        });
+        try addLocalEntries(allocator, io, &prompts, &diagnostics, options.project.prompts, .prompt, .{
+            .source = "local",
+            .scope = .project,
+            .origin = .top_level,
+            .base_dir = project_base_dir,
+        });
+        try addLocalEntries(allocator, io, &themes, &diagnostics, options.project.themes, .theme, .{
+            .source = "local",
+            .scope = .project,
+            .origin = .top_level,
+            .base_dir = project_base_dir,
+        });
+    }
 
     try addLocalEntries(allocator, io, &extensions, &diagnostics, options.global.extensions, .extension, .{
         .source = "local",
@@ -125,14 +127,18 @@ pub fn resolveConfiguredResources(
         .base_dir = options.agent_dir,
     });
 
-    try addPackageSources(allocator, io, &extensions, &skills, &prompts, &themes, &diagnostics, options.project.packages, .project, options.cwd, options.agent_dir);
+    if (options.project_trusted) {
+        try addPackageSources(allocator, io, &extensions, &skills, &prompts, &themes, &diagnostics, options.project.packages, .project, options.cwd, options.agent_dir);
+    }
     try addPackageSources(allocator, io, &extensions, &skills, &prompts, &themes, &diagnostics, options.global.packages, .user, options.cwd, options.agent_dir);
 
-    if (options.include_default_extensions) try addAutoDiscovered(allocator, io, &extensions, &diagnostics, .extension, .project, project_base_dir);
-    if (options.include_default_skills) try addAutoDiscovered(allocator, io, &skills, &diagnostics, .skill, .project, project_base_dir);
-    if (options.include_default_skills) try addAutoDiscoveredProjectAgentSkills(allocator, io, &skills, &diagnostics, options.cwd, options.env_map);
-    if (options.include_default_prompts) try addAutoDiscovered(allocator, io, &prompts, &diagnostics, .prompt, .project, project_base_dir);
-    if (options.include_default_themes) try addAutoDiscovered(allocator, io, &themes, &diagnostics, .theme, .project, project_base_dir);
+    if (options.project_trusted) {
+        if (options.include_default_extensions) try addAutoDiscovered(allocator, io, &extensions, &diagnostics, .extension, .project, project_base_dir);
+        if (options.include_default_skills) try addAutoDiscovered(allocator, io, &skills, &diagnostics, .skill, .project, project_base_dir);
+        if (options.include_default_skills) try addAutoDiscoveredProjectAgentSkills(allocator, io, &skills, &diagnostics, options.cwd, options.env_map);
+        if (options.include_default_prompts) try addAutoDiscovered(allocator, io, &prompts, &diagnostics, .prompt, .project, project_base_dir);
+        if (options.include_default_themes) try addAutoDiscovered(allocator, io, &themes, &diagnostics, .theme, .project, project_base_dir);
+    }
 
     if (options.include_default_extensions) try addAutoDiscovered(allocator, io, &extensions, &diagnostics, .extension, .user, options.agent_dir);
     if (options.include_default_skills) try addAutoDiscovered(allocator, io, &skills, &diagnostics, .skill, .user, options.agent_dir);

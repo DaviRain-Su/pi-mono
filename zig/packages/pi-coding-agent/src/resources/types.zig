@@ -290,6 +290,7 @@ pub const ResolveResourcesOptions = struct {
     include_default_skills: bool = true,
     include_default_prompts: bool = true,
     include_default_themes: bool = true,
+    project_trusted: bool = true,
     extension_discoveries: []const ExtensionDiscoveredResources = &.{},
 };
 
