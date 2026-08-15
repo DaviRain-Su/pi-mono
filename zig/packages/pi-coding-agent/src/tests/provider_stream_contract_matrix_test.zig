@@ -31,6 +31,7 @@ const provider_stream_contract_matrix = [_]ProviderStreamContractCase{
     .{ .label = "Google Generative AI", .api = "google-generative-ai", .provider = "google", .model = "gemini-2.5-pro" },
     .{ .label = "Google Vertex", .api = "google-vertex", .provider = "google-vertex", .model = "gemini-2.5-pro" },
     .{ .label = "Amazon Bedrock", .api = "bedrock-converse-stream", .provider = "amazon-bedrock", .model = "anthropic.claude-3-7-sonnet-20250219-v1:0" },
+    .{ .label = "pi-messages", .api = "pi-messages", .provider = "radius", .model = "auto" },
     .{ .label = "Faux", .api = "faux", .provider = "faux", .model = "faux-contract-model", .built_in = false },
 };
 

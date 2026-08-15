@@ -73,6 +73,7 @@ pub const GoogleStreamOptions = types.GoogleStreamOptions;
 pub const MistralStreamOptions = types.MistralStreamOptions;
 pub const OpenAIChatStreamOptions = types.OpenAIChatStreamOptions;
 pub const ResponsesStreamOptions = types.ResponsesStreamOptions;
+pub const PiMessagesStreamOptions = types.PiMessagesStreamOptions;
 pub const ProviderStreamOptions = types.ProviderStreamOptions;
 pub const StreamOptions = types.StreamOptions;
 pub const SimpleStreamOptions = types.SimpleStreamOptions;

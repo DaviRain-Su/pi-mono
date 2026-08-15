@@ -1298,6 +1298,7 @@ test "ISS-505 built-in representative provider families convert setup failures i
         .{ .api = "google-generative-ai", .provider = "google" },
         .{ .api = "google-vertex", .provider = "google-vertex" },
         .{ .api = "bedrock-converse-stream", .provider = "amazon-bedrock" },
+        .{ .api = "pi-messages", .provider = "radius" },
     };
 
     for (cases) |case| {

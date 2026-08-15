@@ -13,6 +13,7 @@ const mistral = @import("mistral.zig");
 const openai = @import("openai.zig");
 const openai_codex_responses = @import("openai_codex_responses.zig");
 const openai_responses = @import("openai_responses.zig");
+const pi_messages = @import("pi_messages.zig");
 
 pub const StreamFunction = *const fn (
     allocator: std.mem.Allocator,
@@ -59,6 +60,7 @@ const BuiltInApi = enum {
     @"google-generative-ai",
     @"google-vertex",
     @"bedrock-converse-stream",
+    @"pi-messages",
 };
 
 const PROVIDER_METADATA = [_]ProviderMetadata{
@@ -130,6 +132,13 @@ const PROVIDER_METADATA = [_]ProviderMetadata{
         .default_provider = .{
             .stream = bedrock.BedrockProvider.stream,
             .stream_simple = bedrock.BedrockProvider.streamSimple,
+        },
+    },
+    .{
+        .api = "pi-messages",
+        .default_provider = .{
+            .stream = pi_messages.PiMessagesProvider.stream,
+            .stream_simple = pi_messages.PiMessagesProvider.streamSimple,
         },
     },
 };
@@ -504,6 +513,17 @@ const TEST_MODEL_SPECS = [_]TestModelSpec{
         .context_window = 200000,
         .max_tokens = 8192,
     },
+    TestModelSpec{
+        .api = "pi-messages",
+        .provider = "radius",
+        .model_id = "auto",
+        .name = "Radius Auto",
+        .base_url = "https://api.radia.nl/v1",
+        .reasoning = false,
+        .input_types = &[_][]const u8{"text"},
+        .context_window = 128000,
+        .max_tokens = 16384,
+    },
 };
 
 fn testModelFromSpec(spec: TestModelSpec) types.Model {
@@ -572,12 +592,19 @@ fn validateHandoffPayload(allocator: std.mem.Allocator, model: types.Model, cont
         return;
     }
 
+    if (std.mem.eql(u8, model.api, "pi-messages")) {
+        const payload = try pi_messages.buildRequestPayload(allocator, model, context, null);
+        const context_value = payload.object.get("context") orelse return error.MissingField;
+        try expectJsonArrayField(context_value, "messages");
+        return;
+    }
+
     const payload = try openai.buildRequestPayload(allocator, model, context, null);
     try expectJsonArrayField(payload, "messages");
 }
 
 test "built-in api list matches TypeScript registry count" {
-    try std.testing.expectEqual(@as(usize, 10), expectedBuiltInApiCount());
+    try std.testing.expectEqual(@as(usize, 11), expectedBuiltInApiCount());
     try std.testing.expectEqual(expectedBuiltInApiCount(), expectedBuiltInApis().len);
 
     const expected_order = [_][]const u8{
@@ -591,6 +618,7 @@ test "built-in api list matches TypeScript registry count" {
         "google-generative-ai",
         "google-vertex",
         "bedrock-converse-stream",
+        "pi-messages",
     };
     try std.testing.expectEqual(expected_order.len, expectedBuiltInApiCount());
     for (expectedBuiltInApis(), 0..) |api, index| {

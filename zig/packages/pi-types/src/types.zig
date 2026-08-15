@@ -608,6 +608,13 @@ pub const ResponsesStreamOptions = struct {
     text_verbosity: ?[]const u8 = null,
 };
 
+pub const PiMessagesStreamOptions = struct {
+    reasoning: ?ThinkingLevel = null,
+    /// `"auto" | "none" | "required"` or `{ type: "function", function: { name } }`.
+    tool_choice: ?std.json.Value = null,
+    debug: bool = false,
+};
+
 /// Provider-specific stream options, composable across providers.
 ///
 /// Modeled as a struct of optionals (not a tagged union) because real requests
@@ -623,6 +630,7 @@ pub const ProviderStreamOptions = struct {
     mistral: ?MistralStreamOptions = null,
     openai: ?OpenAIChatStreamOptions = null,
     responses: ?ResponsesStreamOptions = null,
+    pi_messages: ?PiMessagesStreamOptions = null,
 };
 
 pub const StreamOptions = struct {
@@ -714,6 +722,7 @@ pub const SimpleStreamOptions = struct {
             .reasoning = self.reasoning,
             .thinking_budgets = self.thinking_budgets,
         };
+        opts.provider.pi_messages = .{ .reasoning = self.reasoning };
         return opts;
     }
 };
