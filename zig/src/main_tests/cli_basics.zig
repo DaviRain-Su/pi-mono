@@ -293,7 +293,7 @@ test "prepareCliRuntime resolves model thinking suffix" {
     var args = try cli.parseArgs(allocator, &.{ "--model", "faux/faux-1:high" });
     defer args.deinit(allocator);
 
-    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, "/tmp/project", &args, .{});
+    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, "/tmp/project", &args, .{}, false);
     defer prepared.deinit(allocator);
 
     try std.testing.expectEqualStrings("faux", prepared.provider_name);

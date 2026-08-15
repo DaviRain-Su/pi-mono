@@ -30,6 +30,31 @@ pub const ProjectTrustUpdate = struct {
     decision: ?bool,
 };
 
+pub const ProjectTrustOption = struct {
+    label: []u8,
+    trusted: bool,
+    updates: []ProjectTrustUpdate,
+    saved_path: ?[]u8,
+
+    pub fn deinit(self: *ProjectTrustOption, allocator: std.mem.Allocator) void {
+        allocator.free(self.label);
+        for (self.updates) |update| allocator.free(update.path);
+        allocator.free(self.updates);
+        if (self.saved_path) |path| allocator.free(path);
+        self.* = undefined;
+    }
+};
+
+pub const OwnedTrustEntry = struct {
+    path: []u8,
+    trusted: bool,
+
+    pub fn deinit(self: *OwnedTrustEntry, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+        self.* = undefined;
+    }
+};
+
 pub const ResolveProjectTrustedOptions = struct {
     cwd: []const u8,
     agent_dir: []const u8,
@@ -37,6 +62,9 @@ pub const ResolveProjectTrustedOptions = struct {
     default_project_trust: DefaultProjectTrust = .ask,
     has_ui: bool = false,
 };
+
+pub const UNTRUSTED_PROJECT_WARNING =
+    "This project is not trusted. Project .pi resources and packages are ignored. Use /trust to save a trust decision, then restart pi.";
 
 const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [_][]const u8{
     "settings.json",
@@ -66,6 +94,151 @@ pub fn getProjectTrustParentPath(allocator: std.mem.Allocator, cwd: []const u8) 
     const owned_parent = try allocator.dupe(u8, parent_dir);
     allocator.free(trust_path);
     return owned_parent;
+}
+
+pub fn formatProjectTrustPrompt(allocator: std.mem.Allocator, cwd: []const u8) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "Trust project folder?\n{s}\n\nThis allows pi to load .pi settings and resources, install missing project packages, and execute project extensions.",
+        .{cwd},
+    );
+}
+
+pub fn formatSavedDecision(
+    allocator: std.mem.Allocator,
+    trust_path: []const u8,
+    entry: ?OwnedTrustEntry,
+) ![]u8 {
+    const decision = entry orelse return allocator.dupe(u8, "Saved decision: none");
+    const label: []const u8 = if (decision.trusted) "trusted" else "untrusted";
+    if (!std.mem.eql(u8, decision.path, trust_path)) {
+        return std.fmt.allocPrint(allocator, "Saved decision: {s} (inherited from {s})", .{ label, decision.path });
+    }
+    return std.fmt.allocPrint(allocator, "Saved decision: {s} ({s})", .{ label, decision.path });
+}
+
+pub fn isSavedTrustOption(option: ProjectTrustOption, entry: ?OwnedTrustEntry) bool {
+    const saved = entry orelse return false;
+    const saved_path = option.saved_path orelse return false;
+    return saved.trusted == option.trusted and std.mem.eql(u8, saved.path, saved_path);
+}
+
+pub fn deinitProjectTrustOptions(allocator: std.mem.Allocator, options: []ProjectTrustOption) void {
+    for (options) |*option| option.deinit(allocator);
+    allocator.free(options);
+}
+
+pub fn getProjectTrustOptions(
+    allocator: std.mem.Allocator,
+    cwd: []const u8,
+    include_session_only: bool,
+) ![]ProjectTrustOption {
+    const trust_path = try normalizeCwd(allocator, cwd);
+    defer allocator.free(trust_path);
+
+    var list = std.ArrayList(ProjectTrustOption).empty;
+    errdefer {
+        for (list.items) |*option| option.deinit(allocator);
+        list.deinit(allocator);
+    }
+
+    try list.append(allocator, try makeTrustOption(
+        allocator,
+        try allocator.dupe(u8, "Trust"),
+        true,
+        &.{.{ .path = trust_path, .decision = true }},
+        trust_path,
+    ));
+
+    if (try getProjectTrustParentPath(allocator, cwd)) |parent_path| {
+        defer allocator.free(parent_path);
+        const label = try std.fmt.allocPrint(allocator, "Trust parent folder ({s})", .{parent_path});
+        try list.append(allocator, try makeTrustOption(
+            allocator,
+            label,
+            true,
+            &.{
+                .{ .path = parent_path, .decision = true },
+                .{ .path = trust_path, .decision = null },
+            },
+            parent_path,
+        ));
+    }
+
+    if (include_session_only) {
+        try list.append(allocator, try makeTrustOption(
+            allocator,
+            try allocator.dupe(u8, "Trust (this session only)"),
+            true,
+            &.{},
+            null,
+        ));
+    }
+
+    try list.append(allocator, try makeTrustOption(
+        allocator,
+        try allocator.dupe(u8, "Do not trust"),
+        false,
+        &.{.{ .path = trust_path, .decision = false }},
+        trust_path,
+    ));
+
+    if (include_session_only) {
+        try list.append(allocator, try makeTrustOption(
+            allocator,
+            try allocator.dupe(u8, "Do not trust (this session only)"),
+            false,
+            &.{},
+            null,
+        ));
+    }
+
+    return list.toOwnedSlice(allocator);
+}
+
+fn makeTrustOption(
+    allocator: std.mem.Allocator,
+    label: []u8,
+    trusted: bool,
+    updates_in: []const ProjectTrustUpdate,
+    saved_path: ?[]const u8,
+) !ProjectTrustOption {
+    errdefer allocator.free(label);
+
+    const updates = try allocator.alloc(ProjectTrustUpdate, updates_in.len);
+    errdefer allocator.free(updates);
+    var made: usize = 0;
+    errdefer {
+        for (updates[0..made]) |update| allocator.free(update.path);
+    }
+    for (updates_in, 0..) |update, index| {
+        updates[index] = .{
+            .path = try allocator.dupe(u8, update.path),
+            .decision = update.decision,
+        };
+        made += 1;
+    }
+
+    const owned_saved = if (saved_path) |path| try allocator.dupe(u8, path) else null;
+    return .{
+        .label = label,
+        .trusted = trusted,
+        .updates = updates,
+        .saved_path = owned_saved,
+    };
+}
+
+pub fn needsProjectTrustPrompt(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    options: ResolveProjectTrustedOptions,
+) !bool {
+    if (options.override != null) return false;
+    if (!try hasTrustRequiringProjectResources(allocator, io, env_map, options.cwd)) return false;
+    const store = ProjectTrustStore.init(allocator, io, options.agent_dir);
+    if (try store.get(options.cwd) != null) return false;
+    return options.default_project_trust == .ask;
 }
 
 pub fn hasTrustRequiringProjectResources(
@@ -172,13 +345,24 @@ pub const ProjectTrustStore = struct {
     }
 
     pub fn get(self: ProjectTrustStore, cwd: []const u8) !?bool {
+        var entry = try self.getEntry(cwd) orelse return null;
+        defer entry.deinit(self.allocator);
+        return entry.trusted;
+    }
+
+    pub fn getEntry(self: ProjectTrustStore, cwd: []const u8) !?OwnedTrustEntry {
         const path = try self.trustPath();
         defer self.allocator.free(path);
         var data = try readTrustFile(self.allocator, self.io, path);
         defer data.deinit();
         const normalized = try normalizeCwd(self.allocator, cwd);
         defer self.allocator.free(normalized);
-        if (findNearestTrustEntry(data.map, normalized)) |entry| return entry.trusted;
+        if (findNearestTrustEntry(data.map, normalized)) |entry| {
+            return .{
+                .path = try self.allocator.dupe(u8, entry.path),
+                .trusted = entry.trusted,
+            };
+        }
         return null;
     }
 
@@ -407,6 +591,116 @@ test "resolveProjectTrusted honors override store and defaultProjectTrust" {
         .cwd = project_dir,
         .agent_dir = agent_dir,
         .default_project_trust = .never,
+    }));
+}
+
+test "getProjectTrustOptions includes parent and session-only choices" {
+    const allocator = std.testing.allocator;
+    const options = try getProjectTrustOptions(allocator, "/parent/project", true);
+    defer deinitProjectTrustOptions(allocator, options);
+
+    try std.testing.expectEqual(@as(usize, 5), options.len);
+    try std.testing.expectEqualStrings("Trust", options[0].label);
+    try std.testing.expect(options[0].trusted);
+    try std.testing.expectEqual(@as(usize, 1), options[0].updates.len);
+    try std.testing.expectEqual(true, options[0].updates[0].decision.?);
+
+    try std.testing.expect(std.mem.startsWith(u8, options[1].label, "Trust parent folder ("));
+    try std.testing.expect(options[1].trusted);
+    try std.testing.expectEqual(@as(usize, 2), options[1].updates.len);
+    try std.testing.expectEqual(true, options[1].updates[0].decision.?);
+    try std.testing.expect(options[1].updates[1].decision == null);
+
+    try std.testing.expectEqualStrings("Trust (this session only)", options[2].label);
+    try std.testing.expect(options[2].trusted);
+    try std.testing.expectEqual(@as(usize, 0), options[2].updates.len);
+    try std.testing.expect(options[2].saved_path == null);
+
+    try std.testing.expectEqualStrings("Do not trust", options[3].label);
+    try std.testing.expect(!options[3].trusted);
+    try std.testing.expectEqualStrings("Do not trust (this session only)", options[4].label);
+    try std.testing.expect(!options[4].trusted);
+    try std.testing.expectEqual(@as(usize, 0), options[4].updates.len);
+}
+
+test "getProjectTrustOptions omits session-only choices by default" {
+    const allocator = std.testing.allocator;
+    const options = try getProjectTrustOptions(allocator, "/parent/project", false);
+    defer deinitProjectTrustOptions(allocator, options);
+    try std.testing.expectEqual(@as(usize, 3), options.len);
+    try std.testing.expectEqualStrings("Trust", options[0].label);
+    try std.testing.expect(std.mem.startsWith(u8, options[1].label, "Trust parent folder ("));
+    try std.testing.expectEqualStrings("Do not trust", options[2].label);
+}
+
+test "formatSavedDecision labels inherited ancestor decisions" {
+    const allocator = std.testing.allocator;
+    const none = try formatSavedDecision(allocator, "/parent/project", null);
+    defer allocator.free(none);
+    try std.testing.expectEqualStrings("Saved decision: none", none);
+
+    var inherited = OwnedTrustEntry{
+        .path = try allocator.dupe(u8, "/parent"),
+        .trusted = true,
+    };
+    defer inherited.deinit(allocator);
+    const inherited_text = try formatSavedDecision(allocator, "/parent/project", inherited);
+    defer allocator.free(inherited_text);
+    try std.testing.expectEqualStrings("Saved decision: trusted (inherited from /parent)", inherited_text);
+
+    var local = OwnedTrustEntry{
+        .path = try allocator.dupe(u8, "/parent/project"),
+        .trusted = false,
+    };
+    defer local.deinit(allocator);
+    const local_text = try formatSavedDecision(allocator, "/parent/project", local);
+    defer allocator.free(local_text);
+    try std.testing.expectEqualStrings("Saved decision: untrusted (/parent/project)", local_text);
+}
+
+test "needsProjectTrustPrompt is true only for ask with resources and no store entry" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "agent");
+    try tmp.dir.createDirPath(std.testing.io, "project/.pi");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "project/.pi/settings.json",
+        .data = "{}",
+    });
+
+    const agent_dir = try makeTmpPath(allocator, tmp, "agent");
+    defer allocator.free(agent_dir);
+    const project_dir = try makeTmpPath(allocator, tmp, "project");
+    defer allocator.free(project_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+
+    try std.testing.expect(try needsProjectTrustPrompt(allocator, std.testing.io, &env_map, .{
+        .cwd = project_dir,
+        .agent_dir = agent_dir,
+        .default_project_trust = .ask,
+    }));
+    try std.testing.expect(!try needsProjectTrustPrompt(allocator, std.testing.io, &env_map, .{
+        .cwd = project_dir,
+        .agent_dir = agent_dir,
+        .override = true,
+        .default_project_trust = .ask,
+    }));
+    try std.testing.expect(!try needsProjectTrustPrompt(allocator, std.testing.io, &env_map, .{
+        .cwd = project_dir,
+        .agent_dir = agent_dir,
+        .default_project_trust = .always,
+    }));
+
+    const store = ProjectTrustStore.init(allocator, std.testing.io, agent_dir);
+    try store.set(project_dir, false);
+    try std.testing.expect(!try needsProjectTrustPrompt(allocator, std.testing.io, &env_map, .{
+        .cwd = project_dir,
+        .agent_dir = agent_dir,
+        .default_project_trust = .ask,
     }));
 }
 

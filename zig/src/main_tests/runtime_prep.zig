@@ -134,7 +134,7 @@ test "prepareCliRuntime loads defaults resources context and prompt templates" {
     defer args.deinit(allocator);
 
     const selected_tools = effectiveToolSelection(&args);
-    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, selected_tools);
+    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, selected_tools, false);
     defer prepared.deinit(allocator);
 
     try std.testing.expectEqualStrings("faux", prepared.provider_name);
@@ -187,7 +187,7 @@ test "prepareCliRuntime appends repeatable CLI system prompts in order" {
     });
     defer args.deinit(allocator);
 
-    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, .{});
+    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, .{}, false);
     defer prepared.deinit(allocator);
 
     const first_index_opt = std.mem.indexOf(u8, prepared.system_prompt, "First appended chunk.");
@@ -314,7 +314,7 @@ test "prepareCliRuntime wires CLI resource overrides and discovery toggles" {
     defer args.deinit(allocator);
 
     const selected_tools = effectiveToolSelection(&args);
-    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, selected_tools);
+    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, selected_tools, false);
     defer prepared.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 1), prepared.resource_bundle.extensions.len);
@@ -375,7 +375,7 @@ test "prepareCliRuntime skips context file discovery when requested" {
     try std.testing.expect(args.verbose);
 
     const selected_tools = effectiveToolSelection(&args);
-    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, selected_tools);
+    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, selected_tools, false);
     defer prepared.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 0), prepared.context_files.len);
@@ -411,7 +411,7 @@ test "prepareCliRuntime selects default model from configured api key" {
     var args = try cli.parseArgs(allocator, &.{});
     defer args.deinit(allocator);
 
-    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, .{});
+    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, .{}, false);
     defer prepared.deinit(allocator);
 
     try std.testing.expectEqualStrings("kimi", prepared.provider_name);
@@ -440,7 +440,7 @@ test "prepareCliRuntime selects kimi-coding from KIMI_API_KEY" {
     var args = try cli.parseArgs(allocator, &.{});
     defer args.deinit(allocator);
 
-    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, .{});
+    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, repo_dir, &args, .{}, false);
     defer prepared.deinit(allocator);
 
     try std.testing.expectEqualStrings("kimi-coding", prepared.provider_name);

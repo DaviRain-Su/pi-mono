@@ -13,6 +13,7 @@ const coding_agent = @import("coding_agent");
 const tool_adapters = @import("coding_agent").tool_adapters;
 const tool_selection = @import("coding_agent").tool_selection;
 const project_trust = @import("coding_agent").project_trust;
+const project_trust_selector = @import("coding_agent").project_trust_selector;
 
 pub const PreparedCliRuntime = struct {
     runtime_config: config_mod.RuntimeConfig,
@@ -54,13 +55,14 @@ pub fn prepareCliRuntime(
     cwd: []const u8,
     options: *const cli.Args,
     selected_tools: tool_selection.ToolSelection,
+    allow_trust_prompt: bool,
 ) !PreparedCliRuntime {
     var runtime_config = try config_mod.loadRuntimeConfigWithOptions(
         allocator,
         io,
         env_map,
         cwd,
-        try runtimeConfigLoadOptions(allocator, io, env_map, cwd, options),
+        try runtimeConfigLoadOptions(allocator, io, env_map, cwd, options, allow_trust_prompt),
     );
     errdefer runtime_config.deinit();
     const effective_tools = selected_tools.withDefaultBuiltins(runtime_config.defaultTools());
@@ -286,16 +288,22 @@ pub fn runtimeConfigLoadOptions(
     env_map: *const std.process.Environ.Map,
     cwd: []const u8,
     options: *const cli.Args,
+    allow_trust_prompt: bool,
 ) !config_mod.RuntimeConfigLoadOptions {
     const agent_dir = try config_mod.resolveAgentDir(allocator, env_map);
     defer allocator.free(agent_dir);
     const default_trust = project_trust.peekDefaultProjectTrust(allocator, io, agent_dir);
-    const project_trusted = try project_trust.resolveProjectTrusted(allocator, io, env_map, .{
+    const resolve_options = project_trust.ResolveProjectTrustedOptions{
         .cwd = cwd,
         .agent_dir = agent_dir,
         .override = options.project_trust_override,
         .default_project_trust = default_trust,
-    });
+        .has_ui = allow_trust_prompt,
+    };
+    const project_trusted = if (allow_trust_prompt and try project_trust.needsProjectTrustPrompt(allocator, io, env_map, resolve_options))
+        try project_trust_selector.promptAndApplyProjectTrust(allocator, io, env_map, cwd, agent_dir)
+    else
+        try project_trust.resolveProjectTrusted(allocator, io, env_map, resolve_options);
     return .{
         .discover_models = bootstrap.startupNetworkOperationsEnabled(options, env_map),
         .project_trusted = project_trusted,
@@ -503,7 +511,7 @@ test "runtimeConfigLoadOptions disables model discovery for offline CLI flag" {
     var args = try cli.parseArgs(allocator, &.{"--offline"});
     defer args.deinit(allocator);
 
-    const options = try runtimeConfigLoadOptions(allocator, std.testing.io, &env_map, "/tmp/project", &args);
+    const options = try runtimeConfigLoadOptions(allocator, std.testing.io, &env_map, "/tmp/project", &args, false);
     try std.testing.expect(!options.discover_models);
 }
 
@@ -517,7 +525,7 @@ test "runtimeConfigLoadOptions disables model discovery for PI_OFFLINE" {
     var args = try cli.parseArgs(allocator, &.{});
     defer args.deinit(allocator);
 
-    const options = try runtimeConfigLoadOptions(allocator, std.testing.io, &env_map, "/tmp/project", &args);
+    const options = try runtimeConfigLoadOptions(allocator, std.testing.io, &env_map, "/tmp/project", &args, false);
     try std.testing.expect(!options.discover_models);
 }
 
@@ -530,7 +538,7 @@ test "runtimeConfigLoadOptions keeps model discovery enabled by default" {
     var args = try cli.parseArgs(allocator, &.{});
     defer args.deinit(allocator);
 
-    const options = try runtimeConfigLoadOptions(allocator, std.testing.io, &env_map, "/tmp/project", &args);
+    const options = try runtimeConfigLoadOptions(allocator, std.testing.io, &env_map, "/tmp/project", &args, false);
     try std.testing.expect(options.discover_models);
 }
 
@@ -543,7 +551,7 @@ test "prepareCliRuntime resolves provider-prefixed CLI model and thinking suffix
     var args = try cli.parseArgs(allocator, &.{ "--model", "faux/faux-1:high" });
     defer args.deinit(allocator);
 
-    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, "/tmp/project", &args, .{});
+    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, "/tmp/project", &args, .{}, false);
     defer prepared.deinit(allocator);
 
     try std.testing.expectEqualStrings("faux", prepared.provider_name);
@@ -562,7 +570,7 @@ test "refreshSystemPromptWithActiveTools advertises no-builtin extension tools" 
     defer args.deinit(allocator);
 
     const selected_tools = tool_selection.ToolSelection.fromCli(false, true, null);
-    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, "/tmp/project", &args, selected_tools);
+    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, "/tmp/project", &args, selected_tools, false);
     defer prepared.deinit(allocator);
 
     try std.testing.expect(std.mem.indexOf(u8, prepared.system_prompt, "Available tools:\n(none)") != null);
@@ -606,7 +614,7 @@ test "prepareCliRuntime reports missing CLI model without provider" {
     var args = try cli.parseArgs(allocator, &.{ "--model", "definitely-not-a-real-model" });
     defer args.deinit(allocator);
 
-    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, "/tmp/project", &args, .{});
+    var prepared = try prepareCliRuntime(allocator, std.testing.io, &env_map, "/tmp/project", &args, .{}, false);
     defer prepared.deinit(allocator);
 
     try std.testing.expect(prepared.model_error != null);

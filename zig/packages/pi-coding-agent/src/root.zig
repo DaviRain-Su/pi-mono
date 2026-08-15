@@ -76,6 +76,7 @@ pub const prompt_templates = @import("core/prompt_templates.zig");
 pub const resource_loader = @import("core/resource_loader.zig");
 pub const settings_manager = @import("core/settings_manager.zig");
 pub const project_trust = @import("core/project_trust.zig");
+pub const project_trust_selector = @import("core/project_trust_selector.zig");
 pub const provider_info = @import("core/provider_info.zig");
 pub const resolve_config_value = @import("core/resolve_config_value.zig");
 pub const source_info = @import("core/source_info.zig");
@@ -236,6 +237,7 @@ test {
     _ = @import("core/resource_loader.zig");
     _ = @import("core/settings_manager.zig");
     _ = @import("core/project_trust.zig");
+    _ = @import("core/project_trust_selector.zig");
     _ = @import("core/provider_info.zig");
     _ = @import("core/resolve_config_value.zig");
     _ = @import("core/source_info.zig");

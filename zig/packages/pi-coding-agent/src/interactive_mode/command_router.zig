@@ -334,7 +334,7 @@ fn handleImmediateSlashCommand(
         .label => try slash_commands.handleLabelSlashCommand(allocator, session, command.argument, app_state),
         .session => try slash_commands.handleSessionSlashCommand(allocator, session, app_state),
         .changelog => try slash_commands.handleChangelogSlashCommand(allocator, io, session, command.argument, app_state),
-        .trust => try slash_commands.handleTrustSlashCommand(allocator, io, options.cwd, command.argument, app_state, live_resources),
+        .trust => try slash_commands.handleTrustSlashCommand(allocator, io, options.cwd, command.argument, app_state, overlay, live_resources),
         else => return false,
     }
     return true;

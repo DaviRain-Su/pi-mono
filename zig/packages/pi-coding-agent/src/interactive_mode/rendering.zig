@@ -3551,6 +3551,16 @@ pub const OverlayPanelComponent = struct {
         drawFittedLine(content_window, row, self.overlay.hint(), styleForToken(self.theme, .overlay_hint));
         row += 2;
 
+        if (self.overlay.* == .trust) {
+            const trust_overlay = self.overlay.trust;
+            drawFittedLine(content_window, row, trust_overlay.cwd, styleForToken(self.theme, .overlay_hint));
+            row += 1;
+            drawFittedLine(content_window, row, trust_overlay.saved_summary, styleForToken(self.theme, .overlay_hint));
+            row += 1;
+            drawFittedLine(content_window, row, trust_overlay.session_summary, styleForToken(self.theme, .overlay_hint));
+            row += 2;
+        }
+
         switch (self.overlay.*) {
             .settings_editor => |*settings_editor| {
                 settings_editor.editor.setEditorStyle(if (self.theme) |t| tui.styleFor(t, .editor) else .{});
@@ -3643,6 +3653,7 @@ pub const OverlayPanelComponent = struct {
                             .model => |*model_overlay| &model_overlay.list,
                             .scoped_models => |*scoped_models_overlay| &scoped_models_overlay.list,
                             .theme => |*theme_overlay| &theme_overlay.list,
+                            .trust => |*trust_overlay| &trust_overlay.list,
                             .tree => |*tree_overlay| &tree_overlay.list,
                             .fork => |*fork_overlay| &fork_overlay.list,
                             .auth => |*auth_overlay| &auth_overlay.list,

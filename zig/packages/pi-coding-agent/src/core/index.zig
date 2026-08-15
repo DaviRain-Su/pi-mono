@@ -6,6 +6,7 @@ pub const extensions = @import("extensions/index.zig");
 pub const skills = @import("skills.zig");
 pub const source_info = @import("source_info.zig");
 pub const project_trust = @import("project_trust.zig");
+pub const project_trust_selector = @import("project_trust_selector.zig");
 
 test {
     _ = experimental;
@@ -16,4 +17,5 @@ test {
     _ = skills;
     _ = source_info;
     _ = project_trust;
+    _ = project_trust_selector;
 }

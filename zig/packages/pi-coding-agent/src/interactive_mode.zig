@@ -10,6 +10,7 @@ const resources_mod = @import("resources/resources.zig");
 const session_advanced = @import("sessions/session_advanced.zig");
 const session_cwd_mod = @import("sessions/session_cwd.zig");
 const missing_cwd_selector_mod = @import("sessions/missing_cwd_selector.zig");
+const project_trust = @import("core/project_trust.zig");
 const session_manager_mod = @import("sessions/session_manager.zig");
 const provider_config = @import("providers/provider_config.zig");
 const session_mod = @import("sessions/session.zig");
@@ -82,6 +83,7 @@ pub const loadScopedModelOverlay = overlays.loadScopedModelOverlay;
 pub const loadSelectableModels = overlays.loadSelectableModels;
 pub const modelSupportsInput = overlays.modelSupportsInput;
 pub const loadTreeOverlay = overlays.loadTreeOverlay;
+pub const loadTrustOverlay = overlays.loadTrustOverlay;
 pub const appendTreeNodes = overlays.appendTreeNodes;
 pub const indentationPrefix = overlays.indentationPrefix;
 pub const summarizeSessionEntry = overlays.summarizeSessionEntry;
@@ -374,6 +376,7 @@ pub fn runInteractiveMode(
         try app_state.setThinkingBlockVisibility(runtime_config.hideThinkingBlock());
     }
     try appendConfigErrorStartupWarning(allocator, live_resources.runtime_config, &app_state);
+    try appendProjectTrustWarningIfNeeded(allocator, io, env_map, options.cwd, live_resources.runtime_config, &app_state);
     try appendVerboseStartupState(
         allocator,
         env_map,
@@ -863,6 +866,20 @@ fn appendConfigErrorStartupWarning(
     try appendConfigErrorsStartupWarning(allocator, config.errors, app_state);
 }
 
+fn appendProjectTrustWarningIfNeeded(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    cwd: []const u8,
+    runtime_config: ?*const config_mod.RuntimeConfig,
+    app_state: *AppState,
+) !void {
+    const config = runtime_config orelse return;
+    if (config.isProjectTrusted()) return;
+    if (!try project_trust.hasTrustRequiringProjectResources(allocator, io, env_map, cwd)) return;
+    try app_state.appendInfo(project_trust.UNTRUSTED_PROJECT_WARNING);
+}
+
 fn appendConfigErrorsStartupWarning(
     allocator: std.mem.Allocator,
     errors: []const config_mod.ConfigError,
@@ -1030,6 +1047,17 @@ pub const testing = struct {
         app_state: *AppState,
     ) !void {
         return appendConfigErrorsStartupWarning(allocator, errors, app_state);
+    }
+
+    pub fn callAppendProjectTrustWarningIfNeeded(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        env_map: *const std.process.Environ.Map,
+        cwd: []const u8,
+        runtime_config: ?*const config_mod.RuntimeConfig,
+        app_state: *AppState,
+    ) !void {
+        return appendProjectTrustWarningIfNeeded(allocator, io, env_map, cwd, runtime_config, app_state);
     }
 
     pub fn callAppendExtensionStartupDiagnosticsToAppState(

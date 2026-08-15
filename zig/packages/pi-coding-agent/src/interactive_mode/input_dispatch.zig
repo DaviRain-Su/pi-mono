@@ -39,6 +39,7 @@ const handleNewSlashCommand = session_lifecycle.handleNewSlashCommand;
 const loadForkOverlayOrStatus = session_lifecycle.loadForkOverlayOrStatus;
 const forkCurrentSessionBeforeUserMessage = session_lifecycle.forkCurrentSessionBeforeUserMessage;
 const applyThemeByName = slash_commands.applyThemeByName;
+const applyTrustOverlayChoice = slash_commands.applyTrustOverlayChoice;
 const navigateTree = session_lifecycle.navigateTree;
 const beginLoginFlow = auth_flow_mod.beginLoginFlow;
 const logoutProviderById = auth_flow_mod.logoutProviderById;
@@ -364,6 +365,7 @@ fn handleOverlayInput(
         .model => &overlay_value.model.list,
         .scoped_models => &overlay_value.scoped_models.list,
         .theme => &overlay_value.theme.list,
+        .trust => &overlay_value.trust.list,
         .tree => &overlay_value.tree.list,
         .fork => &overlay_value.fork.list,
         .auth => &overlay_value.auth.list,
@@ -431,6 +433,15 @@ fn handleOverlayInput(
                         env_map,
                         options.cwd,
                         theme_overlay.choices[index].name,
+                        app_state,
+                        live_resources,
+                    );
+                },
+                .trust => |trust_overlay| {
+                    try applyTrustOverlayChoice(
+                        allocator,
+                        io,
+                        trust_overlay.choices[index],
                         app_state,
                         live_resources,
                     );

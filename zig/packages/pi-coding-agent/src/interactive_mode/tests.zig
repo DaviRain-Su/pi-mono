@@ -229,6 +229,7 @@ const reloadExtensionToolsForInteractiveMode = interactive_mode.testing.callRelo
 const writeTerminalProgress = interactive_mode.testing.callWriteTerminalProgress;
 const updateInteractiveTerminalTitle = interactive_mode.testing.callUpdateInteractiveTerminalTitle;
 const appendConfigErrorsStartupWarning = interactive_mode.testing.callAppendConfigErrorsStartupWarning;
+const appendProjectTrustWarningIfNeeded = interactive_mode.testing.callAppendProjectTrustWarningIfNeeded;
 const appendVerboseStartupState = interactive_mode.testing.callAppendVerboseStartupState;
 const appendExtensionStartupDiagnosticsToAppState = interactive_mode.testing.callAppendExtensionStartupDiagnosticsToAppState;
 
@@ -449,6 +450,59 @@ test "appendConfigErrorsStartupWarning adds nonfatal startup row" {
         }
     }
     try std.testing.expect(saw_warning);
+}
+
+test "appendProjectTrustWarningIfNeeded adds untrusted project row" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "agent");
+    try tmp.dir.createDirPath(std.testing.io, "project/.pi");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "project/.pi/settings.json",
+        .data = "{}",
+    });
+
+    const root_dir = try makeInteractiveTestPath(allocator, tmp, "project");
+    defer allocator.free(root_dir);
+    const agent_dir = try makeInteractiveTestPath(allocator, tmp, "agent");
+    defer allocator.free(agent_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PI_CODING_AGENT_DIR", agent_dir);
+
+    var trusted_config = try config_mod.loadRuntimeConfigWithOptions(
+        allocator,
+        std.testing.io,
+        &env_map,
+        root_dir,
+        .{ .project_trusted = true },
+    );
+    defer trusted_config.deinit();
+    var untrusted_config = try config_mod.loadRuntimeConfigWithOptions(
+        allocator,
+        std.testing.io,
+        &env_map,
+        root_dir,
+        .{ .project_trusted = false },
+    );
+    defer untrusted_config.deinit();
+
+    var trusted_state = try AppState.init(allocator, std.testing.io);
+    defer trusted_state.deinit();
+    try appendProjectTrustWarningIfNeeded(allocator, std.testing.io, &env_map, root_dir, &trusted_config, &trusted_state);
+    var trusted_snapshot = try trusted_state.snapshotForRender(allocator);
+    defer trusted_snapshot.deinit(allocator);
+    try std.testing.expect(!appStateSnapshotContains(trusted_snapshot.items, "This project is not trusted"));
+
+    var untrusted_state = try AppState.init(allocator, std.testing.io);
+    defer untrusted_state.deinit();
+    try appendProjectTrustWarningIfNeeded(allocator, std.testing.io, &env_map, root_dir, &untrusted_config, &untrusted_state);
+    var untrusted_snapshot = try untrusted_state.snapshotForRender(allocator);
+    defer untrusted_snapshot.deinit(allocator);
+    try std.testing.expect(appStateSnapshotContains(untrusted_snapshot.items, "This project is not trusted"));
 }
 
 test "appendExtensionStartupDiagnosticsToAppState filters optional warnings but keeps required and errors" {
@@ -1428,6 +1482,55 @@ test "parseSlashCommand recognizes builtins and arguments" {
 
     try std.testing.expect(parseSlashCommand("hello") == null);
     try std.testing.expect(parseSlashCommand("/unknown") == null);
+}
+
+test "handleTrustSlashCommand without args opens trust overlay" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const root_dir = try makeInteractiveTestPath(allocator, tmp, "repo");
+    defer allocator.free(root_dir);
+    const agent_dir = try makeInteractiveTestPath(allocator, tmp, "agent-home");
+    defer allocator.free(agent_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PI_CODING_AGENT_DIR", agent_dir);
+
+    var runtime_config = try config_mod.loadRuntimeConfig(allocator, std.testing.io, &env_map, root_dir);
+    defer runtime_config.deinit();
+
+    var state = try AppState.init(allocator, std.testing.io);
+    defer state.deinit();
+
+    const options = RunInteractiveModeOptions{
+        .cwd = root_dir,
+        .system_prompt = "sys",
+        .session_dir = try makeInteractiveTestPath(allocator, tmp, "sessions"),
+        .provider = "faux",
+        .runtime_config = &runtime_config,
+    };
+    defer allocator.free(options.session_dir);
+    var live_resources = LiveResources.init(options);
+    defer live_resources.deinit(allocator);
+
+    var overlay: ?SelectorOverlay = null;
+    defer if (overlay) |*value| value.deinit(allocator);
+    try slash_commands.handleTrustSlashCommand(
+        allocator,
+        std.testing.io,
+        root_dir,
+        null,
+        &state,
+        &overlay,
+        &live_resources,
+    );
+
+    try std.testing.expect(overlay != null);
+    try std.testing.expect(overlay.? == .trust);
+    try std.testing.expectEqualStrings(root_dir, overlay.?.trust.cwd);
+    try std.testing.expect(overlay.?.trust.choices.len >= 2);
 }
 
 test "handleLoginSlashCommand opens auth provider selector" {

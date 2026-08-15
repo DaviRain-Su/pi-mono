@@ -16,6 +16,7 @@ const tree_overlay_mod = @import("tree_overlay.zig");
 const settings_overlay_mod = @import("settings_overlay.zig");
 const extension_dialog_mod = @import("extension_dialog.zig");
 const overlay_table = @import("overlay_table.zig");
+const project_trust = @import("../core/project_trust.zig");
 const settingsResources = shared.settingsResources;
 const blocksToText = formatting.blocksToText;
 const formatAssistantMessage = formatting.formatAssistantMessage;
@@ -28,6 +29,7 @@ pub const SelectorOverlay = union(enum) {
     model: ModelOverlay,
     scoped_models: ScopedModelsOverlay,
     theme: ThemeOverlay,
+    trust: TrustOverlay,
     tree: TreeOverlay,
     fork: ForkOverlay,
     auth: AuthOverlay,
@@ -49,6 +51,7 @@ pub const SelectorOverlay = union(enum) {
             .model => self.model.title,
             .scoped_models => "Scoped model selector",
             .theme => "Theme selector",
+            .trust => "Project trust",
             .tree => tree_overlay_mod.title(&self.tree),
             .fork => "Fork from Message",
             .auth => if (self.auth.mode == .login) "Login" else "Logout",
@@ -65,6 +68,7 @@ pub const SelectorOverlay = union(enum) {
             .session => self.session.hint,
             .scoped_models => self.scoped_models.hint,
             .fork => "Up/Down move • Enter fork • Esc cancel",
+            .trust => "Up/Down move • Enter save • Esc cancel",
             .tree => tree_overlay_mod.hint(&self.tree),
             .extension_dialog => self.extension_dialog.hint,
             else => "Up/Down move • Enter select • Esc cancel",
@@ -156,6 +160,29 @@ pub const ThemeOverlay = struct {
         }
         allocator.free(self.items);
         overlay_table.freeTable(allocator, self.table_cells, self.table_rows);
+        self.* = undefined;
+    }
+};
+
+pub const TrustOverlay = struct {
+    cwd: []u8,
+    saved_summary: []u8,
+    session_summary: []u8,
+    choices: []project_trust.ProjectTrustOption,
+    items: []tui.SelectItem,
+    list: tui.SelectList,
+
+    pub fn deinit(self: *TrustOverlay, allocator: std.mem.Allocator) void {
+        allocator.free(self.cwd);
+        allocator.free(self.saved_summary);
+        allocator.free(self.session_summary);
+        project_trust.deinitProjectTrustOptions(allocator, self.choices);
+        for (self.items) |item| {
+            allocator.free(@constCast(item.value));
+            allocator.free(@constCast(item.label));
+            if (item.description) |description| allocator.free(@constCast(description));
+        }
+        allocator.free(self.items);
         self.* = undefined;
     }
 };
@@ -707,6 +734,70 @@ pub fn loadThemeOverlay(
             .table_cells = table_cells,
             .table_rows = table_rows,
             .table_state = .{ .selected_index = selected_index },
+        },
+    };
+}
+
+pub fn loadTrustOverlay(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    cwd: []const u8,
+    runtime_config: *const config_mod.RuntimeConfig,
+) !SelectorOverlay {
+    const store = project_trust.ProjectTrustStore.init(allocator, io, runtime_config.agent_dir);
+    var saved_entry = try store.getEntry(cwd);
+    defer if (saved_entry) |*entry| entry.deinit(allocator);
+
+    const choices = try project_trust.getProjectTrustOptions(allocator, cwd, false);
+    errdefer project_trust.deinitProjectTrustOptions(allocator, choices);
+
+    const owned_cwd = try allocator.dupe(u8, cwd);
+    errdefer allocator.free(owned_cwd);
+    const saved_summary = try project_trust.formatSavedDecision(allocator, choices[0].saved_path orelse cwd, saved_entry);
+    errdefer allocator.free(saved_summary);
+    const session_summary = try std.fmt.allocPrint(
+        allocator,
+        "Current session: {s}",
+        .{if (runtime_config.isProjectTrusted()) "trusted" else "untrusted"},
+    );
+    errdefer allocator.free(session_summary);
+
+    const items = try allocator.alloc(tui.SelectItem, choices.len);
+    errdefer allocator.free(items);
+    var made: usize = 0;
+    errdefer {
+        for (items[0..made]) |item| {
+            allocator.free(@constCast(item.value));
+            allocator.free(@constCast(item.label));
+        }
+    }
+
+    var selected_index: usize = 0;
+    for (choices, 0..) |choice, index| {
+        const is_saved = project_trust.isSavedTrustOption(choice, saved_entry);
+        if (is_saved) selected_index = index;
+        const value_buf = try allocator.dupe(u8, choice.label);
+        errdefer allocator.free(value_buf);
+        const label_buf = if (is_saved)
+            try std.fmt.allocPrint(allocator, "{s} ✓", .{choice.label})
+        else
+            try allocator.dupe(u8, choice.label);
+        items[made] = .{ .value = value_buf, .label = label_buf };
+        made += 1;
+    }
+
+    return .{
+        .trust = .{
+            .cwd = owned_cwd,
+            .saved_summary = saved_summary,
+            .session_summary = session_summary,
+            .choices = choices,
+            .items = items,
+            .list = .{
+                .items = items,
+                .selected_index = selected_index,
+                .max_visible = choices.len,
+            },
         },
     };
 }
@@ -1348,4 +1439,50 @@ fn sessionOverlayContainsLabel(overlay: *const SessionOverlay, needle: []const u
         if (std.mem.indexOf(u8, item.label, needle) != null) return true;
     }
     return false;
+}
+
+test "loadTrustOverlay marks saved parent decision and lists no session-only options" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "agent");
+    try tmp.dir.createDirPath(std.testing.io, "parent/project");
+
+    const cwd = try std.process.currentPathAlloc(std.testing.io, allocator);
+    defer allocator.free(cwd);
+    const agent_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "agent" });
+    defer allocator.free(agent_rel);
+    const parent_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "parent" });
+    defer allocator.free(parent_rel);
+    const project_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "parent", "project" });
+    defer allocator.free(project_rel);
+    const agent_dir = try std.fs.path.resolve(allocator, &.{ cwd, agent_rel });
+    defer allocator.free(agent_dir);
+    const parent_dir = try std.fs.path.resolve(allocator, &.{ cwd, parent_rel });
+    defer allocator.free(parent_dir);
+    const project_dir = try std.fs.path.resolve(allocator, &.{ cwd, project_rel });
+    defer allocator.free(project_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PI_CODING_AGENT_DIR", agent_dir);
+
+    var runtime_config = try config_mod.loadRuntimeConfig(allocator, std.testing.io, &env_map, project_dir);
+    defer runtime_config.deinit();
+
+    const store = project_trust.ProjectTrustStore.init(allocator, std.testing.io, runtime_config.agent_dir);
+    try store.set(parent_dir, true);
+
+    var overlay = try loadTrustOverlay(allocator, std.testing.io, project_dir, &runtime_config);
+    defer overlay.deinit(allocator);
+
+    try std.testing.expect(overlay == .trust);
+    try std.testing.expectEqual(@as(usize, 3), overlay.trust.choices.len);
+    try std.testing.expect(std.mem.indexOf(u8, overlay.trust.saved_summary, "inherited from") != null);
+    try std.testing.expect(std.mem.indexOf(u8, overlay.trust.items[1].label, "✓") != null);
+    try std.testing.expectEqual(@as(usize, 1), overlay.trust.list.selected_index);
+    for (overlay.trust.choices) |choice| {
+        try std.testing.expect(choice.saved_path != null);
+    }
 }

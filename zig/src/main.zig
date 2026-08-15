@@ -233,7 +233,15 @@ fn runCliWithInput(
         preflight_continue_confirmed = preflight_result.continue_confirmed;
     }
 
-    var prepared = try runtime_prep.prepareCliRuntime(allocator, io, &effective_env_map, cwd, &options, selected_tools);
+    var prepared = try runtime_prep.prepareCliRuntime(
+        allocator,
+        io,
+        &effective_env_map,
+        cwd,
+        &options,
+        selected_tools,
+        app_mode == .interactive,
+    );
     defer prepared.deinit(allocator);
     try output.writeResourceDiagnostics(stderr, prepared.resource_bundle.diagnostics);
 

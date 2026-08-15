@@ -39,6 +39,7 @@ const loadThemeOverlay = overlays.loadThemeOverlay;
 const loadScopedModelOverlay = overlays.loadScopedModelOverlay;
 const loadTreeOverlay = overlays.loadTreeOverlay;
 const loadForkOverlay = overlays.loadForkOverlay;
+const loadTrustOverlay = overlays.loadTrustOverlay;
 const AppState = rendering.AppState;
 const rebuildAppStateFromSession = rendering.rebuildAppStateFromSession;
 const updateAppFooterFromSession = rendering.updateAppFooterFromSession;
@@ -941,6 +942,7 @@ pub fn handleTrustSlashCommand(
     cwd: []const u8,
     argument: ?[]const u8,
     app_state: *AppState,
+    overlay: *?SelectorOverlay,
     live_resources: *LiveResources,
 ) !void {
     const runtime_config = live_resources.runtime_config orelse {
@@ -948,21 +950,9 @@ pub fn handleTrustSlashCommand(
         return;
     };
     const store = project_trust.ProjectTrustStore.init(allocator, io, runtime_config.agent_dir);
-    const current = try store.get(cwd);
-    const session_trusted = runtime_config.isProjectTrusted();
 
     const action = argument orelse {
-        const saved = if (current) |trusted|
-            if (trusted) "trusted" else "untrusted"
-        else
-            "none";
-        const message = try std.fmt.allocPrint(
-            allocator,
-            "Project trust: saved {s}, this session {s}. Use /trust yes, /trust no, or /trust parent, then restart pi.",
-            .{ saved, if (session_trusted) "trusted" else "untrusted" },
-        );
-        defer allocator.free(message);
-        try app_state.appendInfo(message);
+        overlay.* = try loadTrustOverlay(allocator, io, cwd, runtime_config);
         return;
     };
 
@@ -994,6 +984,30 @@ pub fn handleTrustSlashCommand(
     }
 
     try app_state.appendError("Usage: /trust [yes|no|parent]");
+}
+
+pub fn applyTrustOverlayChoice(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    choice: project_trust.ProjectTrustOption,
+    app_state: *AppState,
+    live_resources: *LiveResources,
+) !void {
+    const runtime_config = live_resources.runtime_config orelse {
+        try app_state.appendError("Project trust is unavailable without runtime config");
+        return;
+    };
+    if (choice.updates.len > 0) {
+        const store = project_trust.ProjectTrustStore.init(allocator, io, runtime_config.agent_dir);
+        try store.setMany(choice.updates);
+    }
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "Saved trust decision: {s}. Restart pi for this to take effect.",
+        .{if (choice.trusted) "trusted" else "untrusted"},
+    );
+    defer allocator.free(message);
+    try app_state.setStatus(message);
 }
 
 pub fn handleLabelSlashCommand(
