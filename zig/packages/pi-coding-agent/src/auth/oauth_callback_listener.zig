@@ -4,6 +4,7 @@ pub const ProviderKind = enum {
     anthropic,
     openai_codex,
     xai_oauth,
+    radius,
 };
 
 pub fn defaultCallbackPath(kind: ProviderKind) []const u8 {
@@ -11,6 +12,7 @@ pub fn defaultCallbackPath(kind: ProviderKind) []const u8 {
         .anthropic => "/callback",
         .openai_codex => "/auth/callback",
         .xai_oauth => "/callback",
+        .radius => "/oauth/callback",
     };
 }
 
@@ -19,6 +21,7 @@ pub fn defaultCallbackPort(kind: ProviderKind) u16 {
         .anthropic => 53692,
         .openai_codex => 1455,
         .xai_oauth => 56121,
+        .radius => 1456,
     };
 }
 
@@ -408,7 +411,7 @@ fn rawHttpGet(allocator: std.mem.Allocator, io: std.Io, port: u16, target: []con
 
 test "OAuth callback listener accepts provider paths and captures callback URL" {
     const allocator = std.testing.allocator;
-    const cases = [_]ProviderKind{ .anthropic, .openai_codex, .xai_oauth };
+    const cases = [_]ProviderKind{ .anthropic, .openai_codex, .xai_oauth, .radius };
 
     for (cases) |kind| {
         var listener = try OAuthCallbackListener.createForTesting(allocator, std.testing.io, kind, "expected-state", 0);

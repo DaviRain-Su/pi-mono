@@ -1559,6 +1559,7 @@ test "handleLoginSlashCommand opens auth provider selector" {
     var saw_copilot = false;
     var saw_codex_subscription = false;
     var saw_xai_oauth = false;
+    var saw_radius_oauth = false;
     var saw_openai = false;
     for (overlay.?.auth.items) |item| {
         if (std.mem.eql(u8, item.value, "github-copilot")) {
@@ -1574,6 +1575,10 @@ test "handleLoginSlashCommand opens auth provider selector" {
             saw_xai_oauth = true;
             try std.testing.expectEqualStrings("xAI Grok OAuth", item.label);
         }
+        if (std.mem.eql(u8, item.value, "radius") and std.mem.eql(u8, item.description.?, "OAuth login")) {
+            saw_radius_oauth = true;
+            try std.testing.expectEqualStrings("Radius", item.label);
+        }
         if (std.mem.eql(u8, item.value, "openai")) {
             saw_openai = true;
             try std.testing.expectEqualStrings("OpenAI", item.label);
@@ -1583,6 +1588,7 @@ test "handleLoginSlashCommand opens auth provider selector" {
     try std.testing.expect(saw_copilot);
     try std.testing.expect(saw_codex_subscription);
     try std.testing.expect(saw_xai_oauth);
+    try std.testing.expect(saw_radius_oauth);
     try std.testing.expect(saw_openai);
 }
 
@@ -5782,6 +5788,7 @@ fn callbackProviderKindForTest(kind: auth.BrowserLoginKind) auth.OAuthCallbackPr
         .anthropic => .anthropic,
         .openai_codex => .openai_codex,
         .xai_oauth => .xai_oauth,
+        .radius => .radius,
     };
 }
 

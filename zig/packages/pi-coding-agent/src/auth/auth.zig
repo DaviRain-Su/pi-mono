@@ -45,6 +45,8 @@ const GITHUB_COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/tok
 
 const RADIUS_OAUTH_CLIENT_ID = "pi-gateway";
 const RADIUS_TOKEN_URL = "https://radius.pi.dev/v1/oauth/token";
+const RADIUS_REDIRECT_URI = "http://127.0.0.1:1456/oauth/callback";
+const RADIUS_OAUTH_SCOPE = "gateway offline_access";
 const RADIUS_TOKEN_EXPIRY_SKEW_MS: i64 = 60 * std.time.ms_per_s;
 
 const COPILOT_USER_AGENT = "GitHubCopilotChat/0.35.0";
@@ -96,6 +98,7 @@ pub const OAUTH_LOGIN_PROVIDERS = [_]ProviderInfo{
     .{ .id = "openai-codex", .name = "ChatGPT Plus/Pro (Codex Subscription)", .auth_type = .oauth },
     .{ .id = "xai-oauth", .name = "xAI Grok OAuth", .auth_type = .oauth },
     .{ .id = "github-copilot", .name = "GitHub Copilot", .auth_type = .oauth },
+    .{ .id = "radius", .name = "Radius", .auth_type = .oauth },
 };
 
 /// Build an API-key `ProviderInfo` row whose `name` is sourced from
@@ -214,6 +217,7 @@ pub const BrowserLoginKind = enum {
     anthropic,
     openai_codex,
     xai_oauth,
+    radius,
 };
 
 pub const BrowserLoginSession = struct {
@@ -224,12 +228,14 @@ pub const BrowserLoginSession = struct {
     auth_url: []u8,
     verifier: []u8,
     state: []u8,
+    token_url: ?[]u8 = null,
 
     pub fn deinit(self: *BrowserLoginSession, allocator: std.mem.Allocator) void {
         self.oauth_client.deinit(allocator);
         allocator.free(self.auth_url);
         allocator.free(self.verifier);
         allocator.free(self.state);
+        if (self.token_url) |token_url| allocator.free(token_url);
         self.* = undefined;
     }
 };
@@ -340,6 +346,11 @@ const AUTH_PROVIDERS = [_]AuthProviderInfo{
         .default_public_client_id = DEFAULT_XAI_CLIENT_ID,
         .uses_hex_oauth_state = true,
     },
+    .{
+        .id = "radius",
+        .default_public_client_id = RADIUS_OAUTH_CLIENT_ID,
+        .uses_hex_oauth_state = true,
+    },
 };
 
 fn authInfoFor(id: []const u8) ?*const AuthProviderInfo {
@@ -434,6 +445,9 @@ pub fn startBrowserLogin(
     env_map: *const std.process.Environ.Map,
     provider_id: []const u8,
 ) !BrowserLoginSession {
+    if (std.mem.eql(u8, provider_id, "radius")) {
+        return startRadiusBrowserLogin(allocator, io, env_map);
+    }
     for (OAUTH_LOGIN_PROVIDERS_REGISTRY) |desc| {
         if (std.mem.eql(u8, provider_id, desc.id)) {
             return startBrowserLoginForDescriptor(allocator, io, env_map, desc);
@@ -464,6 +478,82 @@ pub fn startXAIBrowserLogin(
     env_map: *const std.process.Environ.Map,
 ) !BrowserLoginSession {
     return startBrowserLoginForDescriptor(allocator, io, env_map, OAUTH_LOGIN_PROVIDERS_REGISTRY[2]);
+}
+
+pub fn startRadiusBrowserLogin(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+) !BrowserLoginSession {
+    return startRadiusBrowserLoginWithGateway(allocator, io, env_map, ai.providers.radius_config.DEFAULT_RADIUS_GATEWAY);
+}
+
+pub fn startRadiusBrowserLoginWithGateway(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    gateway: []const u8,
+) !BrowserLoginSession {
+    const provider = findSupportedProviderByAuthType("radius", .oauth) orelse return error.UnsupportedProvider;
+    const normalized = try ai.providers.radius_config.normalizeRadiusGatewayUrl(allocator, gateway);
+    defer allocator.free(normalized);
+
+    const discovery_url = try ai.providers.radius_config.buildRadiusOAuthDiscoveryUrl(allocator, normalized);
+    defer allocator.free(discovery_url);
+    const owned_token_url = try ai.providers.radius_config.buildRadiusOAuthTokenUrl(allocator, normalized);
+    errdefer allocator.free(owned_token_url);
+
+    const discovery_body = try getRequest(allocator, io, discovery_url, null);
+    defer allocator.free(discovery_body);
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, discovery_body, .{}) catch return error.InvalidAuthResponse;
+    defer parsed.deinit();
+    const authorization_endpoint = ai.providers.radius_config.parseRadiusOAuthDiscovery(parsed.value) orelse
+        return error.InvalidAuthResponse;
+
+    const verifier = try generatePkceVerifier(allocator, io);
+    errdefer allocator.free(verifier);
+    const state = try generateOpenAICodexState(allocator, io);
+    errdefer allocator.free(state);
+    const challenge = try generatePkceChallenge(allocator, verifier);
+    defer allocator.free(challenge);
+
+    var oauth_client = try loadOAuthClientCredentials(allocator, io, env_map, provider.id, false);
+    errdefer oauth_client.deinit(allocator);
+
+    const encoded_client_id = try formEncode(allocator, oauth_client.client_id);
+    defer allocator.free(encoded_client_id);
+    const encoded_redirect_uri = try formEncode(allocator, RADIUS_REDIRECT_URI);
+    defer allocator.free(encoded_redirect_uri);
+    const encoded_scope = try formEncode(allocator, RADIUS_OAUTH_SCOPE);
+    defer allocator.free(encoded_scope);
+    const encoded_challenge = try formEncode(allocator, challenge);
+    defer allocator.free(encoded_challenge);
+    const encoded_state = try formEncode(allocator, state);
+    defer allocator.free(encoded_state);
+
+    const auth_url = try std.fmt.allocPrint(
+        allocator,
+        "{s}?response_type=code&client_id={s}&redirect_uri={s}&scope={s}&code_challenge={s}&code_challenge_method=S256&handoff=url&state={s}",
+        .{
+            authorization_endpoint,
+            encoded_client_id,
+            encoded_redirect_uri,
+            encoded_scope,
+            encoded_challenge,
+            encoded_state,
+        },
+    );
+
+    return .{
+        .kind = .radius,
+        .provider_id = provider.id,
+        .provider_name = provider.name,
+        .oauth_client = oauth_client,
+        .auth_url = auth_url,
+        .verifier = verifier,
+        .state = state,
+        .token_url = owned_token_url,
+    };
 }
 
 fn startBrowserLoginForDescriptor(
@@ -552,6 +642,7 @@ pub fn completeBrowserLogin(
         .anthropic => .{ .oauth = try exchangeAnthropicAuthorizationCode(allocator, io, session, input) },
         .openai_codex => .{ .oauth = try exchangeOpenAICodexAuthorizationCode(allocator, io, session, input) },
         .xai_oauth => .{ .oauth = try exchangeXAIAuthorizationCode(allocator, io, session, input) },
+        .radius => .{ .oauth = try exchangeRadiusAuthorizationCode(allocator, io, session, input) },
     };
 }
 
@@ -1631,6 +1722,51 @@ fn refreshXAIStoredTokenWithUrl(
     return parseOAuthRefreshResponse(allocator, io, response_body, .exact);
 }
 
+fn exchangeRadiusAuthorizationCode(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    session: *const BrowserLoginSession,
+    input: []const u8,
+) !OAuthCredential {
+    return exchangeRadiusAuthorizationCodeWithTokenUrl(
+        allocator,
+        io,
+        session,
+        input,
+        session.token_url orelse RADIUS_TOKEN_URL,
+    );
+}
+
+fn exchangeRadiusAuthorizationCodeWithTokenUrl(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    session: *const BrowserLoginSession,
+    input: []const u8,
+    token_url: []const u8,
+) !OAuthCredential {
+    const parsed = try parseAuthorizationInput(allocator, input);
+    defer parsed.deinit(allocator);
+
+    const state = parsed.state orelse return error.InvalidOAuthState;
+    if (!std.mem.eql(u8, state, session.state)) return error.InvalidOAuthState;
+    const code = parsed.code orelse return error.MissingAuthorizationCode;
+
+    const body = try buildFormBody(allocator, &.{
+        .{ .name = "grant_type", .value = "authorization_code" },
+        .{ .name = "client_id", .value = session.oauth_client.client_id },
+        .{ .name = "redirect_uri", .value = RADIUS_REDIRECT_URI },
+        .{ .name = "code", .value = code },
+        .{ .name = "code_verifier", .value = session.verifier },
+    });
+    defer allocator.free(body);
+
+    const response_body = try postForm(allocator, io, token_url, body, null);
+    defer allocator.free(response_body);
+    var credential = try parseOAuthRefreshResponse(allocator, io, response_body, .exact);
+    credential.expires -= RADIUS_TOKEN_EXPIRY_SKEW_MS;
+    return credential;
+}
+
 fn refreshRadiusStoredTokenWithUrl(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -2120,6 +2256,81 @@ test "startXAIBrowserLogin builds TS-equivalent OAuth URL" {
     try std.testing.expect(std.mem.indexOf(u8, session.auth_url, session.state) != null);
 }
 
+test "startRadiusBrowserLogin discovers the authorize URL and exchanges the callback" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const agent_dir = try makeAuthTestPath(allocator, tmp, "agent-home");
+    defer allocator.free(agent_dir);
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PI_CODING_AGENT_DIR", agent_dir);
+
+    var discovery_server = try ai.provider_error.TestStatusServer.init(
+        io,
+        200,
+        "OK",
+        "",
+        "{\"authorizationEndpoint\":\"https://auth.radius.test/authorize\"}",
+    );
+    defer discovery_server.deinit();
+    try discovery_server.start();
+    const gateway = try discovery_server.url(allocator);
+    defer allocator.free(gateway);
+
+    var session = try startRadiusBrowserLoginWithGateway(allocator, io, &env_map, gateway);
+    defer session.deinit(allocator);
+
+    try std.testing.expectEqual(BrowserLoginKind.radius, session.kind);
+    try std.testing.expectEqualStrings("radius", session.provider_id);
+    try std.testing.expectEqualStrings("Radius", session.provider_name);
+    try std.testing.expectEqualStrings(RADIUS_OAUTH_CLIENT_ID, session.oauth_client.client_id);
+    try std.testing.expect(std.mem.indexOf(u8, session.auth_url, "https://auth.radius.test/authorize") != null);
+    try std.testing.expect(std.mem.indexOf(u8, session.auth_url, "client_id=pi-gateway") != null);
+    try std.testing.expect(std.mem.indexOf(u8, session.auth_url, "scope=gateway%20offline_access") != null);
+    try std.testing.expect(std.mem.indexOf(u8, session.auth_url, "handoff=url") != null);
+    try std.testing.expect(std.mem.indexOf(u8, session.auth_url, "redirect_uri=http%3A%2F%2F127.0.0.1%3A1456%2Foauth%2Fcallback") != null);
+    try std.testing.expect(session.token_url != null);
+    try std.testing.expect(std.mem.endsWith(u8, session.token_url.?, "/v1/oauth/token"));
+
+    var token_server = try ai.provider_error.TestStatusServer.init(
+        io,
+        200,
+        "OK",
+        "",
+        "{\"access_token\":\"radius-access\",\"refresh_token\":\"radius-refresh\",\"expires_in\":3600}",
+    );
+    defer token_server.deinit();
+    try token_server.start();
+    const token_url = try token_server.url(allocator);
+    defer allocator.free(token_url);
+
+    const callback = try std.fmt.allocPrint(
+        allocator,
+        "http://127.0.0.1:1456/oauth/callback?code=fake-code&state={s}",
+        .{session.state},
+    );
+    defer allocator.free(callback);
+
+    var credential = try exchangeRadiusAuthorizationCodeWithTokenUrl(allocator, io, &session, callback, token_url);
+    defer credential.deinit(allocator);
+    try std.testing.expectEqualStrings("radius-access", credential.access);
+    try std.testing.expectEqualStrings("radius-refresh", credential.refresh);
+
+    try std.testing.expectError(
+        error.InvalidOAuthState,
+        exchangeRadiusAuthorizationCodeWithTokenUrl(
+            allocator,
+            io,
+            &session,
+            "http://127.0.0.1:1456/oauth/callback?code=fake-code&state=wrong-state",
+            token_url,
+        ),
+    );
+}
+
 test "loadOAuthClientCredentials uses public built-in client ids without oauth config" {
     const allocator = std.testing.allocator;
 
@@ -2152,6 +2363,11 @@ test "loadOAuthClientCredentials uses public built-in client ids without oauth c
     defer xai.deinit(allocator);
     try std.testing.expectEqualStrings(DEFAULT_XAI_CLIENT_ID, xai.client_id);
     try std.testing.expect(xai.client_secret == null);
+
+    var radius = try loadOAuthClientCredentials(allocator, std.testing.io, &env_map, "radius", false);
+    defer radius.deinit(allocator);
+    try std.testing.expectEqualStrings(RADIUS_OAUTH_CLIENT_ID, radius.client_id);
+    try std.testing.expect(radius.client_secret == null);
 
     const copilot_body = try buildFormBody(allocator, &.{
         .{ .name = "client_id", .value = copilot.client_id },

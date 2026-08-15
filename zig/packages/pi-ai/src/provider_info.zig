@@ -371,6 +371,7 @@ pub const PROVIDERS: []const ProviderInfo = &.{
         .missing_api_key_message = "Radius credentials required.\nSet RADIUS_API_KEY, pass --api-key, or run /login radius.",
         .env_var = "RADIUS_API_KEY",
         .default_api = "pi-messages",
+        .oauth_default_client_id = "pi-gateway",
     },
     .{
         .id = "together",

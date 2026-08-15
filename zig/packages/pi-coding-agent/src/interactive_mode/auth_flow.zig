@@ -150,6 +150,7 @@ fn callbackProviderKind(kind: auth.BrowserLoginKind) auth.OAuthCallbackProviderK
         .anthropic => .anthropic,
         .openai_codex => .openai_codex,
         .xai_oauth => .xai_oauth,
+        .radius => .radius,
     };
 }
 
@@ -258,7 +259,7 @@ pub fn submitAuthFlowInput(
             }
 
             switch (redirect.session.kind) {
-                .anthropic, .openai_codex, .xai_oauth => {},
+                .anthropic, .openai_codex, .xai_oauth, .radius => {},
             }
             var credential = try auth.completeBrowserLogin(allocator, io, &redirect.session, trimmed);
             defer credential.deinit(allocator);
