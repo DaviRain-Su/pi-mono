@@ -69,6 +69,10 @@ pub fn buildRadiusOAuthTokenUrl(allocator: std.mem.Allocator, gateway: []const u
     return joinGatewayPath(allocator, gateway, "/v1/oauth/token");
 }
 
+pub fn buildRadiusOAuthDeviceUrl(allocator: std.mem.Allocator, gateway: []const u8) ![]u8 {
+    return joinGatewayPath(allocator, gateway, "/v1/oauth/device");
+}
+
 pub fn parseRadiusOAuthDiscovery(value: std.json.Value) ?[]const u8 {
     if (value != .object) return null;
     return jsonString(value.object, "authorizationEndpoint");
@@ -344,6 +348,10 @@ test "buildRadiusConfigUrl replaces the gateway path like URL(/v1/config)" {
     const token = try buildRadiusOAuthTokenUrl(allocator, "https://example.test/custom/gw");
     defer allocator.free(token);
     try std.testing.expectEqualStrings("https://example.test/v1/oauth/token", token);
+
+    const device = try buildRadiusOAuthDeviceUrl(allocator, "https://example.test/custom/gw");
+    defer allocator.free(device);
+    try std.testing.expectEqualStrings("https://example.test/v1/oauth/device", device);
 }
 
 test "sanitizeRadiusGatewayConfig keeps valid models and drops invalid ones" {

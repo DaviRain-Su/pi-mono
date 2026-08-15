@@ -42,6 +42,8 @@ const applyThemeByName = slash_commands.applyThemeByName;
 const applyTrustOverlayChoice = slash_commands.applyTrustOverlayChoice;
 const navigateTree = session_lifecycle.navigateTree;
 const beginLoginFlow = auth_flow_mod.beginLoginFlow;
+const beginRadiusDeviceLoginFlow = auth_flow_mod.beginRadiusDeviceLoginFlow;
+const loadRadiusLoginMethodOverlay = overlays.loadRadiusLoginMethodOverlay;
 const logoutProviderById = auth_flow_mod.logoutProviderById;
 const cancelAuthFlow = auth_flow_mod.cancelAuthFlow;
 const submitAuthFlowInput = auth_flow_mod.submitAuthFlowInput;
@@ -472,15 +474,45 @@ fn handleOverlayInput(
                     }
                 },
                 .auth => |auth_overlay| switch (auth_overlay.mode) {
-                    .login => try beginLoginFlow(
-                        allocator,
-                        io,
-                        env_map,
-                        auth_overlay.choices[index].provider_id,
-                        auth_overlay.choices[index].auth_type,
-                        app_state,
-                        auth_flow,
-                    ),
+                    .login => {
+                        const choice = auth_overlay.choices[index];
+                        if (std.mem.eql(u8, choice.provider_id, "radius") and choice.auth_type == .oauth) {
+                            if (choice.radius_login_method) |method| {
+                                switch (method) {
+                                    .browser => try beginLoginFlow(
+                                        allocator,
+                                        io,
+                                        env_map,
+                                        choice.provider_id,
+                                        choice.auth_type,
+                                        app_state,
+                                        auth_flow,
+                                    ),
+                                    .device_code => try beginRadiusDeviceLoginFlow(
+                                        allocator,
+                                        io,
+                                        env_map,
+                                        app_state,
+                                        auth_flow,
+                                    ),
+                                }
+                            } else {
+                                overlay_value.deinit(allocator);
+                                overlay.* = try loadRadiusLoginMethodOverlay(allocator);
+                                return;
+                            }
+                        } else {
+                            try beginLoginFlow(
+                                allocator,
+                                io,
+                                env_map,
+                                choice.provider_id,
+                                choice.auth_type,
+                                app_state,
+                                auth_flow,
+                            );
+                        }
+                    },
                     .logout => try logoutProviderById(
                         allocator,
                         io,

@@ -63,6 +63,7 @@ pub const ModelOverlay = overlays.ModelOverlay;
 pub const TreeChoice = overlays.TreeChoice;
 pub const TreeOverlay = overlays.TreeOverlay;
 pub const AuthOverlayMode = overlays.AuthOverlayMode;
+pub const RadiusLoginMethod = overlays.RadiusLoginMethod;
 pub const AuthChoice = overlays.AuthChoice;
 pub const AuthOverlay = overlays.AuthOverlay;
 pub const AuthFlow = overlays.AuthFlow;
@@ -72,6 +73,7 @@ pub const PendingApiKeyEntry = overlays.PendingApiKeyEntry;
 pub const isApiKeyLoginProvider = auth.isApiKeyLoginProvider;
 pub const getApiKeyProviderDisplayName = auth.getApiKeyProviderDisplayName;
 pub const loadAuthOverlay = overlays.loadAuthOverlay;
+pub const loadRadiusLoginMethodOverlay = overlays.loadRadiusLoginMethodOverlay;
 pub const loadSettingsEditorOverlay = overlays.loadSettingsEditorOverlay;
 pub const loadHotkeysOverlay = overlays.loadHotkeysOverlay;
 pub const loadInfoOverlay = overlays.loadInfoOverlay;
@@ -263,6 +265,8 @@ fn shouldShowExtensionLifecycleDiagnosticInAppState(
 
 pub const handleLoginSlashCommand = auth_flow_mod.handleLoginSlashCommand;
 pub const beginLoginFlow = auth_flow_mod.beginLoginFlow;
+pub const beginRadiusDeviceLoginFlow = auth_flow_mod.beginRadiusDeviceLoginFlow;
+pub const beginRadiusDeviceLoginFlowWithGateway = auth_flow_mod.beginRadiusDeviceLoginFlowWithGateway;
 pub const cancelAuthFlow = auth_flow_mod.cancelAuthFlow;
 pub const submitAuthFlowInput = auth_flow_mod.submitAuthFlowInput;
 pub const persistLoginCredential = auth_flow_mod.persistLoginCredential;

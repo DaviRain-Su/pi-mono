@@ -170,6 +170,7 @@ const resolveCurrentLabelTargetId = interactive_mode.resolveCurrentLabelTargetId
 const handleCompactSlashCommand = interactive_mode.handleCompactSlashCommand;
 const handleLoginSlashCommand = interactive_mode.handleLoginSlashCommand;
 const beginLoginFlow = interactive_mode.beginLoginFlow;
+const beginRadiusDeviceLoginFlowWithGateway = interactive_mode.beginRadiusDeviceLoginFlowWithGateway;
 const cancelAuthFlow = interactive_mode.cancelAuthFlow;
 const submitAuthFlowInput = interactive_mode.submitAuthFlowInput;
 const persistLoginCredential = interactive_mode.persistLoginCredential;
@@ -1590,6 +1591,100 @@ test "handleLoginSlashCommand opens auth provider selector" {
     try std.testing.expect(saw_xai_oauth);
     try std.testing.expect(saw_radius_oauth);
     try std.testing.expect(saw_openai);
+}
+
+test "handleLoginSlashCommand opens Radius login method overlay" {
+    const allocator = std.testing.allocator;
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+
+    var state = try AppState.init(allocator, std.testing.io);
+    defer state.deinit();
+
+    var overlay: ?SelectorOverlay = null;
+    defer if (overlay) |*value| value.deinit(allocator);
+
+    auth_flow_mod.test_auth_flow = null;
+    try handleLoginSlashCommand(allocator, std.testing.io, &env_map, "radius", &state, &overlay, &auth_flow_mod.test_auth_flow);
+
+    try std.testing.expect(overlay != null);
+    try std.testing.expect(overlay.? == .auth);
+    try std.testing.expectEqual(AuthOverlayMode.login, overlay.?.auth.mode);
+    try std.testing.expectEqual(@as(usize, 2), overlay.?.auth.choices.len);
+    try std.testing.expectEqual(interactive_mode.RadiusLoginMethod.browser, overlay.?.auth.choices[0].radius_login_method.?);
+    try std.testing.expectEqual(interactive_mode.RadiusLoginMethod.device_code, overlay.?.auth.choices[1].radius_login_method.?);
+    try std.testing.expectEqualStrings("Sign in with browser (recommended)", overlay.?.auth.items[0].label);
+    try std.testing.expectEqualStrings(
+        "Sign in with device code (when signing in from another device)",
+        overlay.?.auth.items[1].label,
+    );
+    try std.testing.expect(auth_flow_mod.test_auth_flow == null);
+}
+
+test "beginRadiusDeviceLoginFlowWithGateway starts device prompt state" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const agent_dir = try makeInteractiveTestPath(allocator, tmp, "agent-home");
+    defer allocator.free(agent_dir);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PI_CODING_AGENT_DIR", agent_dir);
+
+    var state = try AppState.init(allocator, io);
+    defer state.deinit();
+
+    auth_flow_mod.test_auth_flow = null;
+    defer if (auth_flow_mod.test_auth_flow) |*value| {
+        value.deinit(allocator);
+        auth_flow_mod.test_auth_flow = null;
+    };
+
+    var device_server = try ai.provider_error.TestStatusServer.init(
+        io,
+        200,
+        "OK",
+        "",
+        "{\"device_code\":\"dev-code\",\"user_code\":\"WDJB-MJHT\",\"verification_uri\":\"https://radius.test/device\",\"expires_in\":600,\"interval\":7}",
+    );
+    defer device_server.deinit();
+    try device_server.start();
+    const gateway = try device_server.url(allocator);
+    defer allocator.free(gateway);
+
+    var browser_open_capture = BrowserOpenCapture{};
+    const previous_open = auth_flow_mod.open_browser_fn;
+    const previous_context = auth_flow_mod.open_browser_context;
+    auth_flow_mod.open_browser_fn = BrowserOpenCapture.capture;
+    auth_flow_mod.open_browser_context = &browser_open_capture;
+    defer {
+        auth_flow_mod.open_browser_fn = previous_open;
+        auth_flow_mod.open_browser_context = previous_context;
+    }
+
+    try beginRadiusDeviceLoginFlowWithGateway(
+        allocator,
+        io,
+        &env_map,
+        gateway,
+        &state,
+        &auth_flow_mod.test_auth_flow,
+    );
+
+    try std.testing.expect(auth_flow_mod.test_auth_flow != null);
+    try std.testing.expect(auth_flow_mod.test_auth_flow.? == .radius_device);
+    try std.testing.expectEqualStrings("WDJB-MJHT", auth_flow_mod.test_auth_flow.?.radius_device.user_code);
+    try std.testing.expectEqual(@as(u32, 7), auth_flow_mod.test_auth_flow.?.radius_device.interval_seconds);
+    try std.testing.expect(browser_open_capture.called);
+    try std.testing.expectEqualStrings("https://radius.test/device", browser_open_capture.url.?);
+
+    state.mutex.lockUncancelable(state.io);
+    defer state.mutex.unlock(state.io);
+    try std.testing.expect(std.mem.indexOf(u8, state.chat.items.items[1].text, "WDJB-MJHT") != null);
 }
 
 test "beginLoginFlow starts anthropic oauth prompt state" {

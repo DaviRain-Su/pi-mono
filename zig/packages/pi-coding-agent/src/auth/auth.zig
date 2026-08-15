@@ -47,6 +47,8 @@ const RADIUS_OAUTH_CLIENT_ID = "pi-gateway";
 const RADIUS_TOKEN_URL = "https://radius.pi.dev/v1/oauth/token";
 const RADIUS_REDIRECT_URI = "http://127.0.0.1:1456/oauth/callback";
 const RADIUS_OAUTH_SCOPE = "gateway offline_access";
+const RADIUS_DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
+const RADIUS_DEFAULT_DEVICE_POLL_INTERVAL_SECONDS: u32 = 5;
 const RADIUS_TOKEN_EXPIRY_SKEW_MS: i64 = 60 * std.time.ms_per_s;
 
 const COPILOT_USER_AGENT = "GitHubCopilotChat/0.35.0";
@@ -268,6 +270,27 @@ pub const CopilotPollResult = union(enum) {
             .pending => |value| allocator.free(value),
             .completed => |*value| value.deinit(allocator),
         }
+        self.* = undefined;
+    }
+};
+
+pub const RadiusDeviceLogin = struct {
+    provider_id: []const u8 = "radius",
+    provider_name: []const u8 = "Radius",
+    oauth_client: OAuthClientCredentials,
+    device_code: []u8,
+    user_code: []u8,
+    verification_uri: []u8,
+    interval_seconds: u32,
+    expires_at_ms: i64,
+    token_url: []u8,
+
+    pub fn deinit(self: *RadiusDeviceLogin, allocator: std.mem.Allocator) void {
+        self.oauth_client.deinit(allocator);
+        allocator.free(self.device_code);
+        allocator.free(self.user_code);
+        allocator.free(self.verification_uri);
+        allocator.free(self.token_url);
         self.* = undefined;
     }
 };
@@ -732,6 +755,111 @@ pub fn pollGitHubCopilotLogin(
     }
     if (std.mem.eql(u8, error_name, "slow_down")) {
         return .{ .pending = try allocator.dupe(u8, "GitHub asked to slow down polling. Wait a few seconds, then press Enter again.") };
+    }
+    if (std.mem.eql(u8, error_name, "expired_token")) return error.AuthenticationExpired;
+    if (std.mem.eql(u8, error_name, "access_denied")) return error.AuthenticationDenied;
+    return error.InvalidAuthResponse;
+}
+
+pub fn startRadiusDeviceLogin(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+) !RadiusDeviceLogin {
+    return startRadiusDeviceLoginWithGateway(
+        allocator,
+        io,
+        env_map,
+        ai.providers.radius_config.DEFAULT_RADIUS_GATEWAY,
+    );
+}
+
+pub fn startRadiusDeviceLoginWithGateway(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    gateway: []const u8,
+) !RadiusDeviceLogin {
+    const provider = findSupportedProviderByAuthType("radius", .oauth) orelse return error.UnsupportedProvider;
+    const normalized = try ai.providers.radius_config.normalizeRadiusGatewayUrl(allocator, gateway);
+    defer allocator.free(normalized);
+
+    const device_url = try ai.providers.radius_config.buildRadiusOAuthDeviceUrl(allocator, normalized);
+    defer allocator.free(device_url);
+    const owned_token_url = try ai.providers.radius_config.buildRadiusOAuthTokenUrl(allocator, normalized);
+    errdefer allocator.free(owned_token_url);
+
+    var oauth_client = try loadOAuthClientCredentials(allocator, io, env_map, provider.id, false);
+    errdefer oauth_client.deinit(allocator);
+
+    const body = try buildFormBody(allocator, &.{
+        .{ .name = "client_id", .value = oauth_client.client_id },
+        .{ .name = "scope", .value = RADIUS_OAUTH_SCOPE },
+    });
+    defer allocator.free(body);
+
+    const response_body = try postForm(allocator, io, device_url, body, null);
+    defer allocator.free(response_body);
+
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, response_body, .{}) catch return error.InvalidAuthResponse;
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidAuthResponse;
+
+    const device_code = getObjectString(parsed.value.object, "device_code") orelse return error.InvalidAuthResponse;
+    const user_code = getObjectString(parsed.value.object, "user_code") orelse return error.InvalidAuthResponse;
+    const verification_uri = getObjectString(parsed.value.object, "verification_uri") orelse return error.InvalidAuthResponse;
+    const expires_in = getObjectInt(parsed.value.object, "expires_in") orelse return error.InvalidAuthResponse;
+    const interval = getObjectInt(parsed.value.object, "interval");
+
+    return .{
+        .provider_id = provider.id,
+        .provider_name = provider.name,
+        .oauth_client = oauth_client,
+        .device_code = try allocator.dupe(u8, device_code),
+        .user_code = try allocator.dupe(u8, user_code),
+        .verification_uri = try allocator.dupe(u8, verification_uri),
+        .interval_seconds = if (interval) |value| @intCast(value) else RADIUS_DEFAULT_DEVICE_POLL_INTERVAL_SECONDS,
+        .expires_at_ms = currentTimeMs(io) + expires_in * std.time.ms_per_s,
+        .token_url = owned_token_url,
+    };
+}
+
+pub fn pollRadiusDeviceLogin(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    session: *const RadiusDeviceLogin,
+) !CopilotPollResult {
+    if (currentTimeMs(io) >= session.expires_at_ms) return error.AuthenticationExpired;
+
+    const body = try buildFormBody(allocator, &.{
+        .{ .name = "grant_type", .value = RADIUS_DEVICE_CODE_GRANT_TYPE },
+        .{ .name = "client_id", .value = session.oauth_client.client_id },
+        .{ .name = "device_code", .value = session.device_code },
+    });
+    defer allocator.free(body);
+
+    const response = try postFormWithStatus(allocator, io, session.token_url, body, null);
+    defer allocator.free(response.body);
+
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, response.body, .{}) catch return error.InvalidAuthResponse;
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidAuthResponse;
+
+    if (getObjectString(parsed.value.object, "access_token") != null) {
+        var credential = try parseOAuthRefreshResponse(allocator, io, response.body, .exact);
+        credential.expires -= RADIUS_TOKEN_EXPIRY_SKEW_MS;
+        return .{ .completed = credential };
+    }
+
+    const error_name = getObjectString(parsed.value.object, "error") orelse {
+        if (response.status < 200 or response.status >= 300) return error.HttpRequestFailed;
+        return error.InvalidAuthResponse;
+    };
+    if (std.mem.eql(u8, error_name, "authorization_pending")) {
+        return .{ .pending = try allocator.dupe(u8, "Authorization still pending. Finish login in the browser, then press Enter again.") };
+    }
+    if (std.mem.eql(u8, error_name, "slow_down")) {
+        return .{ .pending = try allocator.dupe(u8, "Radius asked to slow down polling. Wait a few seconds, then press Enter again.") };
     }
     if (std.mem.eql(u8, error_name, "expired_token")) return error.AuthenticationExpired;
     if (std.mem.eql(u8, error_name, "access_denied")) return error.AuthenticationDenied;
@@ -1946,6 +2074,43 @@ fn postForm(
     return try allocator.dupe(u8, response.body);
 }
 
+const FormStatusResponse = struct {
+    status: u16,
+    body: []const u8,
+};
+
+fn postFormWithStatus(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    url: []const u8,
+    body: []const u8,
+    extra_headers: ?*std.StringHashMap([]const u8),
+) !FormStatusResponse {
+    var headers = try initHeaders(allocator, &.{
+        .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" },
+        .{ .name = "Accept", .value = "application/json" },
+    });
+    defer deinitHeaders(allocator, &headers);
+    if (extra_headers) |value| try cloneHeadersInto(allocator, &headers, value);
+
+    var client = try ai.http_client.HttpClient.init(allocator, io);
+    defer client.deinit();
+
+    var streaming = client.requestStreaming(.{
+        .method = .POST,
+        .url = url,
+        .headers = headers,
+        .body = body,
+    }) catch |err| return mapHttpError(err);
+    defer streaming.deinit();
+
+    const response_body = try streaming.readAllBounded(allocator, ai.http_client.max_response_body_bytes);
+    return .{
+        .status = streaming.status,
+        .body = response_body,
+    };
+}
+
 fn initHeaders(allocator: std.mem.Allocator, pairs: []const struct { name: []const u8, value: []const u8 }) !std.StringHashMap([]const u8) {
     var headers = std.StringHashMap([]const u8).init(allocator);
     errdefer deinitHeaders(allocator, &headers);
@@ -2329,6 +2494,130 @@ test "startRadiusBrowserLogin discovers the authorize URL and exchanges the call
             token_url,
         ),
     );
+}
+
+test "startRadiusDeviceLogin authorizes a device code and polls token errors" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const agent_dir = try makeAuthTestPath(allocator, tmp, "agent-home");
+    defer allocator.free(agent_dir);
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PI_CODING_AGENT_DIR", agent_dir);
+
+    var device_server = try ai.provider_error.TestStatusServer.init(
+        io,
+        200,
+        "OK",
+        "",
+        "{\"device_code\":\"dev-code\",\"user_code\":\"WDJB-MJHT\",\"verification_uri\":\"https://radius.test/device\",\"expires_in\":600}",
+    );
+    defer device_server.deinit();
+    try device_server.start();
+    const gateway = try device_server.url(allocator);
+    defer allocator.free(gateway);
+
+    var session = try startRadiusDeviceLoginWithGateway(allocator, io, &env_map, gateway);
+    defer session.deinit(allocator);
+
+    try std.testing.expectEqualStrings("radius", session.provider_id);
+    try std.testing.expectEqualStrings("Radius", session.provider_name);
+    try std.testing.expectEqualStrings(RADIUS_OAUTH_CLIENT_ID, session.oauth_client.client_id);
+    try std.testing.expectEqualStrings("dev-code", session.device_code);
+    try std.testing.expectEqualStrings("WDJB-MJHT", session.user_code);
+    try std.testing.expectEqualStrings("https://radius.test/device", session.verification_uri);
+    try std.testing.expectEqual(@as(u32, 5), session.interval_seconds);
+    try std.testing.expect(std.mem.endsWith(u8, session.token_url, "/v1/oauth/token"));
+
+    var pending_server = try ai.provider_error.TestStatusServer.init(
+        io,
+        400,
+        "Bad Request",
+        "",
+        "{\"error\":\"authorization_pending\"}",
+    );
+    defer pending_server.deinit();
+    try pending_server.start();
+    const pending_url = try pending_server.url(allocator);
+    defer allocator.free(pending_url);
+    allocator.free(session.token_url);
+    session.token_url = try allocator.dupe(u8, pending_url);
+
+    var pending = try pollRadiusDeviceLogin(allocator, io, &session);
+    defer pending.deinit(allocator);
+    try std.testing.expect(pending == .pending);
+    try std.testing.expect(std.mem.indexOf(u8, pending.pending, "pending") != null);
+
+    var slow_server = try ai.provider_error.TestStatusServer.init(
+        io,
+        400,
+        "Bad Request",
+        "",
+        "{\"error\":\"slow_down\",\"interval\":10}",
+    );
+    defer slow_server.deinit();
+    try slow_server.start();
+    const slow_url = try slow_server.url(allocator);
+    defer allocator.free(slow_url);
+    allocator.free(session.token_url);
+    session.token_url = try allocator.dupe(u8, slow_url);
+
+    var slowed = try pollRadiusDeviceLogin(allocator, io, &session);
+    defer slowed.deinit(allocator);
+    try std.testing.expect(slowed == .pending);
+    try std.testing.expect(std.mem.indexOf(u8, slowed.pending, "slow down") != null);
+
+    var denied_server = try ai.provider_error.TestStatusServer.init(
+        io,
+        400,
+        "Bad Request",
+        "",
+        "{\"error\":\"access_denied\"}",
+    );
+    defer denied_server.deinit();
+    try denied_server.start();
+    const denied_url = try denied_server.url(allocator);
+    defer allocator.free(denied_url);
+    allocator.free(session.token_url);
+    session.token_url = try allocator.dupe(u8, denied_url);
+    try std.testing.expectError(error.AuthenticationDenied, pollRadiusDeviceLogin(allocator, io, &session));
+
+    var expired_server = try ai.provider_error.TestStatusServer.init(
+        io,
+        400,
+        "Bad Request",
+        "",
+        "{\"error\":\"expired_token\"}",
+    );
+    defer expired_server.deinit();
+    try expired_server.start();
+    const expired_url = try expired_server.url(allocator);
+    defer allocator.free(expired_url);
+    allocator.free(session.token_url);
+    session.token_url = try allocator.dupe(u8, expired_url);
+    try std.testing.expectError(error.AuthenticationExpired, pollRadiusDeviceLogin(allocator, io, &session));
+
+    var token_server = try ai.provider_error.TestStatusServer.init(
+        io,
+        200,
+        "OK",
+        "",
+        "{\"access_token\":\"radius-access\",\"refresh_token\":\"radius-refresh\",\"expires_in\":3600}",
+    );
+    defer token_server.deinit();
+    try token_server.start();
+    const token_url = try token_server.url(allocator);
+    defer allocator.free(token_url);
+    allocator.free(session.token_url);
+    session.token_url = try allocator.dupe(u8, token_url);
+
+    var completed = try pollRadiusDeviceLogin(allocator, io, &session);
+    defer completed.deinit(allocator);
+    try std.testing.expectEqualStrings("radius-access", completed.completed.access);
+    try std.testing.expectEqualStrings("radius-refresh", completed.completed.refresh);
 }
 
 test "loadOAuthClientCredentials uses public built-in client ids without oauth config" {

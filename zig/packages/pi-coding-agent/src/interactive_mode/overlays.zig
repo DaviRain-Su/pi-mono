@@ -228,10 +228,16 @@ pub const AuthOverlayMode = enum {
     logout,
 };
 
+pub const RadiusLoginMethod = enum {
+    browser,
+    device_code,
+};
+
 pub const AuthChoice = struct {
     provider_id: []u8,
     provider_name: []u8,
     auth_type: auth.ProviderAuthType,
+    radius_login_method: ?RadiusLoginMethod = null,
 };
 
 pub const AuthOverlay = struct {
@@ -266,12 +272,14 @@ pub const AuthOverlay = struct {
 pub const AuthFlow = union(enum) {
     browser_redirect: PendingBrowserRedirect,
     copilot_device: auth.CopilotDeviceLogin,
+    radius_device: auth.RadiusDeviceLogin,
     api_key: PendingApiKeyEntry,
 
     pub fn deinit(self: *AuthFlow, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .browser_redirect => |*value| value.deinit(allocator),
             .copilot_device => |*value| value.deinit(allocator),
+            .radius_device => |*value| value.deinit(allocator),
             .api_key => |*value| value.deinit(allocator),
         }
         self.* = undefined;
@@ -372,6 +380,86 @@ pub fn loadAuthOverlay(
     return .{
         .auth = .{
             .mode = mode,
+            .choices = choices,
+            .items = items,
+            .list = .{
+                .items = items,
+                .max_visible = 8,
+            },
+            .table_cells = table_cells,
+            .table_rows = table_rows,
+            .table_state = .{},
+        },
+    };
+}
+
+pub fn loadRadiusLoginMethodOverlay(allocator: std.mem.Allocator) !SelectorOverlay {
+    const methods = [_]struct {
+        method: RadiusLoginMethod,
+        value: []const u8,
+        label: []const u8,
+        description: []const u8,
+    }{
+        .{
+            .method = .browser,
+            .value = "browser",
+            .label = "Sign in with browser (recommended)",
+            .description = "Open a local callback and finish in this browser",
+        },
+        .{
+            .method = .device_code,
+            .value = "device-code",
+            .label = "Sign in with device code (when signing in from another device)",
+            .description = "Enter a short code on another device",
+        },
+    };
+
+    const choices = try allocator.alloc(AuthChoice, methods.len);
+    errdefer {
+        for (choices) |choice| {
+            allocator.free(choice.provider_id);
+            allocator.free(choice.provider_name);
+        }
+        allocator.free(choices);
+    }
+
+    const items = try allocator.alloc(tui.SelectItem, methods.len);
+    errdefer {
+        for (items) |item| {
+            allocator.free(@constCast(item.value));
+            allocator.free(@constCast(item.label));
+            if (item.description) |description| allocator.free(@constCast(description));
+        }
+        allocator.free(items);
+    }
+
+    const table_cells = try allocator.alloc(tui.TableCell, methods.len * 3);
+    errdefer allocator.free(table_cells);
+    const table_rows = try allocator.alloc(tui.TableRow, methods.len);
+    errdefer allocator.free(table_rows);
+
+    for (methods, 0..) |method, index| {
+        choices[index] = .{
+            .provider_id = try allocator.dupe(u8, "radius"),
+            .provider_name = try allocator.dupe(u8, "Radius"),
+            .auth_type = .oauth,
+            .radius_login_method = method.method,
+        };
+        items[index] = .{
+            .value = try allocator.dupe(u8, method.value),
+            .label = try allocator.dupe(u8, method.label),
+            .description = try allocator.dupe(u8, method.description),
+        };
+        const cell_start = index * 3;
+        table_cells[cell_start] = .{ .text = " " };
+        table_cells[cell_start + 1] = .{ .text = items[index].label };
+        table_cells[cell_start + 2] = .{ .text = if (method.method == .browser) "Browser" else "Device" };
+        table_rows[index] = .{ .cells = table_cells[cell_start .. cell_start + 3] };
+    }
+
+    return .{
+        .auth = .{
+            .mode = .login,
             .choices = choices,
             .items = items,
             .list = .{

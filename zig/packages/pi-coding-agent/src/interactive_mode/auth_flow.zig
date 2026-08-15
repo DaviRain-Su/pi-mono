@@ -17,6 +17,7 @@ const overrideApiKeyForProvider = shared.overrideApiKeyForProvider;
 const SelectorOverlay = overlays.SelectorOverlay;
 const AuthFlow = overlays.AuthFlow;
 const loadAuthOverlay = overlays.loadAuthOverlay;
+const loadRadiusLoginMethodOverlay = overlays.loadRadiusLoginMethodOverlay;
 const AppState = rendering.AppState;
 
 pub fn handleLoginSlashCommand(
@@ -29,6 +30,10 @@ pub fn handleLoginSlashCommand(
     auth_flow: *?AuthFlow,
 ) !void {
     if (argument) |provider_id| {
+        if (std.mem.eql(u8, provider_id, "radius")) {
+            overlay.* = try loadRadiusLoginMethodOverlay(allocator);
+            return;
+        }
         try beginLoginFlow(allocator, io, env_map, provider_id, null, app_state, auth_flow);
         return;
     }
@@ -143,6 +148,71 @@ pub fn beginLoginFlow(
     const message = try std.fmt.allocPrint(allocator, "Unsupported login provider: {s}", .{provider_id});
     defer allocator.free(message);
     try app_state.appendError(message);
+}
+
+pub fn beginRadiusDeviceLoginFlow(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    app_state: *AppState,
+    auth_flow: *?AuthFlow,
+) !void {
+    if (auth_flow.*) |*existing| existing.deinit(allocator);
+    auth_flow.* = null;
+
+    const device = auth.startRadiusDeviceLogin(allocator, io, env_map) catch |err| {
+        if (try auth.formatOAuthClientConfigError(allocator, env_map, "radius", err)) |message| {
+            defer allocator.free(message);
+            try app_state.appendError(message);
+            return;
+        }
+        return err;
+    };
+    try finishRadiusDeviceLoginStart(allocator, io, device, app_state, auth_flow);
+}
+
+pub fn beginRadiusDeviceLoginFlowWithGateway(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    gateway: []const u8,
+    app_state: *AppState,
+    auth_flow: *?AuthFlow,
+) !void {
+    if (auth_flow.*) |*existing| existing.deinit(allocator);
+    auth_flow.* = null;
+
+    const device = auth.startRadiusDeviceLoginWithGateway(allocator, io, env_map, gateway) catch |err| {
+        if (try auth.formatOAuthClientConfigError(allocator, env_map, "radius", err)) |message| {
+            defer allocator.free(message);
+            try app_state.appendError(message);
+            return;
+        }
+        return err;
+    };
+    try finishRadiusDeviceLoginStart(allocator, io, device, app_state, auth_flow);
+}
+
+fn finishRadiusDeviceLoginStart(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    device: auth.RadiusDeviceLogin,
+    app_state: *AppState,
+    auth_flow: *?AuthFlow,
+) !void {
+    var owned = device;
+    errdefer owned.deinit(allocator);
+    openBrowserBestEffort(io, owned.verification_uri);
+
+    const intro = try std.fmt.allocPrint(
+        allocator,
+        "Radius login started. Open {s} and enter code `{s}`.",
+        .{ owned.verification_uri, owned.user_code },
+    );
+    defer allocator.free(intro);
+    try app_state.appendInfo(intro);
+    try app_state.setStatus("Finish the browser login, then press Enter to complete authentication");
+    auth_flow.* = .{ .radius_device = owned };
 }
 
 fn callbackProviderKind(kind: auth.BrowserLoginKind) auth.OAuthCallbackProviderKind {
@@ -301,6 +371,38 @@ pub fn submitAuthFlowInput(
                         current_provider,
                         copilot.provider_id,
                         copilot.provider_name,
+                        &credential,
+                        options,
+                        app_state,
+                        auth_flow,
+                        live_resources,
+                    );
+                },
+            }
+        },
+        .radius_device => |radius| {
+            var result = try auth.pollRadiusDeviceLogin(allocator, io, &radius);
+            defer result.deinit(allocator);
+            switch (result) {
+                .pending => |message| {
+                    try app_state.setStatus(message);
+                    return;
+                },
+                .completed => |oauth_credential| {
+                    var credential = auth.StoredCredential{ .oauth = .{
+                        .access = try allocator.dupe(u8, oauth_credential.access),
+                        .refresh = try allocator.dupe(u8, oauth_credential.refresh),
+                        .expires = oauth_credential.expires,
+                    } };
+                    defer credential.deinit(allocator);
+                    try persistLoginCredential(
+                        allocator,
+                        io,
+                        env_map,
+                        session,
+                        current_provider,
+                        radius.provider_id,
+                        radius.provider_name,
                         &credential,
                         options,
                         app_state,
