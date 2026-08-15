@@ -1,0 +1,26 @@
+.{
+    .name = .pi_cli,
+    .version = "0.16.0",
+    .fingerprint = 0xa1b2e849dd53019,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .pi_coding_agent = .{
+            .path = "../pi-coding-agent",
+        },
+        .pi_agent_core = .{
+            .path = "../pi-agent-core",
+        },
+        .pi_ai = .{
+            .path = "../pi-ai",
+        },
+        .pi_shared = .{
+            .path = "../pi-shared",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}

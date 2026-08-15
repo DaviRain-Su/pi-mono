@@ -2,6 +2,13 @@
     .name = .zig,
     .version = "0.16.0",
     .dependencies = .{
+        .pi_types = .{ .path = "packages/pi-types" },
+        .pi_shared = .{ .path = "packages/pi-shared" },
+        .pi_ai = .{ .path = "packages/pi-ai" },
+        .pi_agent_core = .{ .path = "packages/pi-agent-core" },
+        .pi_tui = .{ .path = "packages/pi-tui" },
+        .pi_coding_agent = .{ .path = "packages/pi-coding-agent" },
+        .pi_cli = .{ .path = "packages/pi-cli" },
         .vaxis = .{ .path = "vendor/vaxis" },
         .zigimg = .{
             .url = "git+https://github.com/zigimg/zigimg#d695acd97c02e57bb151e8f659d1280f5cd6ca70",

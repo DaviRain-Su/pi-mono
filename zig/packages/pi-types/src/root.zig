@@ -1,0 +1,91 @@
+//! pi-types — canonical messages, tools, usage, stream events, and thin Model/Context.
+//!
+//! No IO. Both `pi-ai` and `pi-agent-core` depend on this package.
+
+pub const json = @import("json.zig");
+pub const json_parse = @import("json_parse.zig");
+pub const event_stream = @import("event_stream.zig");
+pub const event_stream_guard = @import("event_stream_guard.zig");
+
+const types = @import("types.zig");
+pub const abort_signal_load_order = types.abort_signal_load_order;
+pub const Api = types.Api;
+pub const Provider = types.Provider;
+pub const ImagesApi = types.ImagesApi;
+pub const ImagesProvider = types.ImagesProvider;
+pub const ThinkingLevel = types.ThinkingLevel;
+pub const ModelThinkingLevel = types.ModelThinkingLevel;
+pub const ThinkingLevelMapping = types.ThinkingLevelMapping;
+pub const ModelThinkingLevelMap = types.ModelThinkingLevelMap;
+pub const AnthropicEffort = types.AnthropicEffort;
+pub const AnthropicThinkingDisplay = types.AnthropicThinkingDisplay;
+pub const ThinkingBudgets = types.ThinkingBudgets;
+pub const AnthropicToolChoice = types.AnthropicToolChoice;
+pub const BedrockToolChoice = types.BedrockToolChoice;
+pub const CacheRetention = types.CacheRetention;
+pub const Transport = types.Transport;
+pub const StopReason = types.StopReason;
+pub const UsageCost = types.UsageCost;
+pub const Usage = types.Usage;
+pub const TextContent = types.TextContent;
+pub const ImageContent = types.ImageContent;
+pub const ImagesInputContent = types.ImagesInputContent;
+pub const ImagesOutputContent = types.ImagesOutputContent;
+pub const ThinkingContent = types.ThinkingContent;
+pub const ToolCall = types.ToolCall;
+pub const ContentBlock = types.ContentBlock;
+pub const textSignature = types.textSignature;
+pub const thinkingSignature = types.thinkingSignature;
+pub const UserMessage = types.UserMessage;
+pub const AssistantMessage = types.AssistantMessage;
+pub const countInlineToolCalls = types.countInlineToolCalls;
+pub const hasInlineToolCalls = types.hasInlineToolCalls;
+pub const shouldReplayAssistantInProviderContext = types.shouldReplayAssistantInProviderContext;
+pub const collectAssistantToolCalls = types.collectAssistantToolCalls;
+pub const freeAssistantMessage = types.freeAssistantMessage;
+pub const DiagnosticErrorInfo = types.DiagnosticErrorInfo;
+pub const AssistantMessageDiagnostic = types.AssistantMessageDiagnostic;
+pub const freeAssistantMessageDiagnostics = types.freeAssistantMessageDiagnostics;
+pub const freeContentBlocks = types.freeContentBlocks;
+pub const freeContentBlock = types.freeContentBlock;
+pub const freeToolCalls = types.freeToolCalls;
+pub const freeToolCall = types.freeToolCall;
+pub const ToolResultMessage = types.ToolResultMessage;
+pub const Message = types.Message;
+pub const Tool = types.Tool;
+pub const Context = types.Context;
+pub const ModelCost = types.ModelCost;
+pub const OpenAICompletionsCompat = types.OpenAICompletionsCompat;
+pub const OpenAIResponsesCompat = types.OpenAIResponsesCompat;
+pub const AnthropicMessagesCompat = types.AnthropicMessagesCompat;
+pub const OpenRouterRouting = types.OpenRouterRouting;
+pub const VercelGatewayRouting = types.VercelGatewayRouting;
+pub const Model = types.Model;
+pub const GoogleThinkingOptions = types.GoogleThinkingOptions;
+pub const AnthropicStreamOptions = types.AnthropicStreamOptions;
+pub const BedrockStreamOptions = types.BedrockStreamOptions;
+pub const AzureStreamOptions = types.AzureStreamOptions;
+pub const GoogleStreamOptions = types.GoogleStreamOptions;
+pub const MistralStreamOptions = types.MistralStreamOptions;
+pub const OpenAIChatStreamOptions = types.OpenAIChatStreamOptions;
+pub const ResponsesStreamOptions = types.ResponsesStreamOptions;
+pub const ProviderStreamOptions = types.ProviderStreamOptions;
+pub const StreamOptions = types.StreamOptions;
+pub const SimpleStreamOptions = types.SimpleStreamOptions;
+pub const EventType = types.EventType;
+pub const AssistantMessageEvent = types.AssistantMessageEvent;
+pub const ImagesStopReason = types.ImagesStopReason;
+pub const ImagesContext = types.ImagesContext;
+pub const ImagesModel = types.ImagesModel;
+pub const AssistantImages = types.AssistantImages;
+pub const ImagesOptions = types.ImagesOptions;
+pub const freeImagesContent = types.freeImagesContent;
+pub const freeAssistantImages = types.freeAssistantImages;
+
+test {
+    _ = @import("json.zig");
+    _ = @import("json_parse.zig");
+    _ = @import("types.zig");
+    _ = @import("event_stream.zig");
+    _ = @import("event_stream_guard.zig");
+}

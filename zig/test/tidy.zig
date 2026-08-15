@@ -46,44 +46,47 @@ const AllowlistedTestFile = struct {
 // refactors move tests into leaf modules that would otherwise silently disappear.
 const known_test_roots = [_][]const u8{
     "src/main.zig",
-    "src/ai/root.zig",
-    "src/agent/root.zig",
-    "src/coding_agent/root.zig",
-    "src/coding_agent/tests/interactive_mode_rendering_test_root.zig",
-    "src/tui/root.zig",
+    "packages/pi-ai/src/root.zig",
+    "packages/pi-agent-core/src/root.zig",
+    "packages/pi-coding-agent/src/root.zig",
+    "packages/pi-coding-agent/src/tests/interactive_mode_rendering_test_root.zig",
+    "packages/pi-tui/src/root.zig",
+    "packages/pi-types/src/root.zig",
+    "packages/pi-shared/src/root.zig",
+    "packages/pi-cli/src/root.zig",
     "src/web_ui/root.zig",
     "test/tidy.zig",
 };
 
 const long_function_allowlist = [_]AllowlistedLongFunction{
-    .{ .path = "src/ai/providers/azure_openai_responses.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/ai/providers/google.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/ai/providers/kimi.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/ai/providers/mistral.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/ai/providers/openai.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/ai/providers/openai.zig", .function_name = "buildRequestPayloadWithCacheRetentionEnv", .reason = "pre-existing OpenAI payload construction debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/ai/providers/openai.zig", .function_name = "buildAssistantMessage", .reason = "pre-existing OpenAI response conversion debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/ai/providers/openai_codex_responses.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/ai/providers/openai_responses.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/cli/args.zig", .function_name = "parseArgs", .reason = "pre-existing CLI argument parser debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/config/config.zig", .function_name = "loadModelsConfig", .reason = "pre-existing config loader debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/extensions/extension_registry.zig", .function_name = "applyHostFrame", .reason = "pre-existing registry frame dispatcher debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/interactive_mode.zig", .function_name = "runInteractiveMode", .reason = "pre-existing interactive mode orchestration debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/interactive_mode/input_dispatch.zig", .function_name = "handleInputKeyWithModifiers", .reason = "pre-existing key dispatch debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/interactive_mode/slash_commands.zig", .function_name = "handleSlashCommand", .reason = "pre-existing slash command dispatcher debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/packages/package_command_parser.zig", .function_name = "parsePackageCommand", .reason = "extracted package command parser remains tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/sessions/session_html_export.zig", .function_name = "renderSessionHtml", .reason = "pre-existing session HTML renderer debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/sessions/session_manager.zig", .function_name = "parseEntryLine", .reason = "pre-existing session entry parser debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/tools/bash.zig", .function_name = "executeWithUpdates", .reason = "pre-existing bash execution orchestration debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/tools/grep.zig", .function_name = "execute", .reason = "pre-existing grep tool orchestration debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/modes/ts_rpc_mode.zig", .function_name = "handleCommand", .reason = "pre-existing TS-RPC command dispatcher debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/modes/ts_rpc_mode.zig", .function_name = "writeExtensionUIRequestFromHost", .reason = "pre-existing TS-RPC UI bridge serialization debt tracked by exact function allowlist so new long functions still fail tidy" },
-    .{ .path = "src/coding_agent/modes/ts_rpc_mode.zig", .function_name = "emitExtensionTurnEndFrame", .reason = "pre-existing TS-RPC turn-end emission debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-ai/src/providers/azure_openai_responses.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-ai/src/providers/google.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-ai/src/providers/kimi.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-ai/src/providers/mistral.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-ai/src/providers/openai.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-ai/src/providers/openai.zig", .function_name = "buildRequestPayloadWithCacheRetentionEnv", .reason = "pre-existing OpenAI payload construction debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-ai/src/providers/openai.zig", .function_name = "buildAssistantMessage", .reason = "pre-existing OpenAI response conversion debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-ai/src/providers/openai_codex_responses.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-ai/src/providers/openai_responses.zig", .function_name = "parseSseStreamLines", .reason = "pre-existing provider SSE parser debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-cli/src/args.zig", .function_name = "parseArgs", .reason = "pre-existing CLI argument parser debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/config/config.zig", .function_name = "loadModelsConfig", .reason = "pre-existing config loader debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/extensions/extension_registry.zig", .function_name = "applyHostFrame", .reason = "pre-existing registry frame dispatcher debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/interactive_mode.zig", .function_name = "runInteractiveMode", .reason = "pre-existing interactive mode orchestration debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/interactive_mode/input_dispatch.zig", .function_name = "handleInputKeyWithModifiers", .reason = "pre-existing key dispatch debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/interactive_mode/slash_commands.zig", .function_name = "handleSlashCommand", .reason = "pre-existing slash command dispatcher debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/packages/package_command_parser.zig", .function_name = "parsePackageCommand", .reason = "extracted package command parser remains tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/sessions/session_html_export.zig", .function_name = "renderSessionHtml", .reason = "pre-existing session HTML renderer debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/sessions/session_manager.zig", .function_name = "parseEntryLine", .reason = "pre-existing session entry parser debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/tools/bash.zig", .function_name = "executeWithUpdates", .reason = "pre-existing bash execution orchestration debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/tools/grep.zig", .function_name = "execute", .reason = "pre-existing grep tool orchestration debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/modes/ts_rpc_mode.zig", .function_name = "handleCommand", .reason = "pre-existing TS-RPC command dispatcher debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/modes/ts_rpc_mode.zig", .function_name = "writeExtensionUIRequestFromHost", .reason = "pre-existing TS-RPC UI bridge serialization debt tracked by exact function allowlist so new long functions still fail tidy" },
+    .{ .path = "packages/pi-coding-agent/src/modes/ts_rpc_mode.zig", .function_name = "emitExtensionTurnEndFrame", .reason = "pre-existing TS-RPC turn-end emission debt tracked by exact function allowlist so new long functions still fail tidy" },
     .{ .path = "src/main.zig", .function_name = "runCliWithInput", .reason = "pre-existing CLI orchestration debt tracked by exact function allowlist so new long functions still fail tidy" },
 };
 
 const test_root_coverage_allowlist = [_]AllowlistedTestFile{
-    .{ .path = "src/ai/oauth/pkce.zig", .reason = "pre-existing standalone OAuth PKCE scaffold is not reachable from current build roots; keep explicit until OAuth module wiring is updated" },
+    .{ .path = "packages/pi-ai/src/oauth/pkce.zig", .reason = "pre-existing standalone OAuth PKCE scaffold is not reachable from current build roots; keep explicit until OAuth module wiring is updated" },
 };
 
 const Tidy = struct {
@@ -331,6 +334,7 @@ pub fn main(init: std.process.Init) !void {
     var tidy = Tidy.init(init.gpa, init.io, config);
     defer tidy.deinit();
     try tidy.scanTree("src");
+    try tidy.scanTree("packages");
     try tidy.scanTree("test");
     try tidy.runChecks();
 
@@ -729,7 +733,7 @@ test "scanLongFunctions suppresses exact allowlisted legacy functions" {
         .reachable_files = std.StringHashMap(void).init(std.testing.allocator),
     };
     defer tidy.deinit();
-    const warnings = try scanLongFunctionsInFile("src/ai/providers/openai.zig", source, 3, &tidy);
+    const warnings = try scanLongFunctionsInFile("packages/pi-ai/src/providers/openai.zig", source, 3, &tidy);
     try std.testing.expectEqual(@as(usize, 0), warnings);
     try std.testing.expectEqual(@as(usize, 0), tidy.warnings);
     try std.testing.expectEqual(@as(usize, 0), tidy.long_function_warnings.items.len);

@@ -1,0 +1,17 @@
+.{
+    .name = .pi_agent_core,
+    .version = "0.16.0",
+    .fingerprint = 0xcea112a7024e01d1,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .pi_types = .{
+            .path = "../pi-types",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}

@@ -49,7 +49,31 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const external_tool_check_step = addExternalToolCheckStep(b);
-    const vaxis_dep = b.dependency("vaxis", .{
+    const types_dep = b.dependency("pi_types", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const shared_dep = b.dependency("pi_shared", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const ai_dep = b.dependency("pi_ai", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const agent_dep = b.dependency("pi_agent_core", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const tui_dep = b.dependency("pi_tui", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const coding_dep = b.dependency("pi_coding_agent", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const cli_dep = b.dependency("pi_cli", .{
         .target = target,
         .optimize = optimize,
     });
@@ -57,6 +81,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const types_mod = types_dep.module("pi-types");
+    const shared_mod = shared_dep.module("shared");
+    const ai_mod = ai_dep.module("ai");
+    const agent_mod = agent_dep.module("agent");
+    const tui_mod = tui_dep.module("tui");
+    const coding_agent_mod = coding_dep.module("coding_agent");
+    const cli_mod = cli_dep.module("cli");
     const zigimg_mod = zigimg_dep.module("zigimg");
     const version = b.option([]const u8, "version", "Application version") orelse "0.16.0";
     const build_options = b.addOptions();
@@ -69,49 +100,13 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mod.addOptions("build_options", build_options);
-
-    const shared_mod = b.createModule(.{
-        .root_source_file = b.path("src/shared/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const ai_mod = b.createModule(.{
-        .root_source_file = b.path("src/ai/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-
-    const agent_mod = b.createModule(.{
-        .root_source_file = b.path("src/agent/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    agent_mod.addImport("ai", ai_mod);
-
-    const vaxis_widgets_mod = b.createModule(.{
-        .root_source_file = b.path("vaxis-widgets/src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    vaxis_widgets_mod.addImport("vaxis", vaxis_dep.module("vaxis"));
-
-    const tui_mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    tui_mod.addImport("shared", shared_mod);
-    tui_mod.addImport("vaxis", vaxis_dep.module("vaxis"));
-    tui_mod.addImport("vaxis-widgets", vaxis_widgets_mod);
-
+    mod.addImport("pi-types", types_mod);
     mod.addImport("ai", ai_mod);
     mod.addImport("agent", agent_mod);
     mod.addImport("shared", shared_mod);
     mod.addImport("tui", tui_mod);
+    mod.addImport("coding_agent", coding_agent_mod);
+    mod.addImport("cli", cli_mod);
     mod.addImport("zigimg", zigimg_mod);
 
     // Main executable
@@ -247,17 +242,6 @@ pub fn build(b: *std.Build) void {
     agent_test_step.dependOn(external_tool_check_step);
     agent_test_step.dependOn(&run_agent_tests.step);
 
-    const coding_agent_mod = b.createModule(.{
-        .root_source_file = b.path("src/coding_agent/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    coding_agent_mod.addImport("ai", ai_mod);
-    coding_agent_mod.addImport("agent", agent_mod);
-    coding_agent_mod.addImport("shared", shared_mod);
-    coding_agent_mod.addImport("tui", tui_mod);
-    coding_agent_mod.addImport("zigimg", zigimg_mod);
-
     const coding_agent_tests = b.addTest(.{
         .root_module = coding_agent_mod,
         .filters = coding_agent_test_filters,
@@ -276,10 +260,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    main_test_mod.addImport("pi-types", types_mod);
     main_test_mod.addImport("ai", ai_mod);
     main_test_mod.addImport("agent", agent_mod);
     main_test_mod.addImport("shared", shared_mod);
     main_test_mod.addImport("tui", tui_mod);
+    main_test_mod.addImport("coding_agent", coding_agent_mod);
+    main_test_mod.addImport("cli", cli_mod);
     main_test_mod.addImport("zigimg", zigimg_mod);
     main_test_mod.addOptions("build_options", build_options);
 
@@ -332,7 +319,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const coding_agent_rendering_mod = b.createModule(.{
-        .root_source_file = b.path("src/coding_agent/tests/interactive_mode_rendering_test_root.zig"),
+        .root_source_file = b.path("packages/pi-coding-agent/src/tests/interactive_mode_rendering_test_root.zig"),
         .target = target,
         .optimize = optimize,
     });

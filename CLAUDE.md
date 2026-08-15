@@ -28,10 +28,10 @@ Build order is hard-coded in the root `npm run build` script: tui → ai → age
 
 ### Zig implementation
 
-`zig/src/` mirrors the TS layering: `ai/`, `agent/`, `coding_agent/`, `tui/`, plus a `cli/` orchestrator and `main.zig`. Each top-level module exposes a `root.zig` and is wired as a Zig module in `zig/build.zig` (`ai`, `agent`, `tui`, then `coding_agent` imports the others). Provider implementations live in `zig/src/ai/providers/`, parallel to the TS ones.
+Zig packages live under `zig/packages/` (`pi-types`, `pi-ai`, `pi-agent-core`, `pi-tui`, `pi-shared`, `pi-coding-agent`, `pi-cli`). `zig/src/main.zig` is the process entry. Root `zig/build.zig` assembles them with `b.dependency(...)`. Import names stay `ai` / `agent` / `tui` / `coding_agent` / `cli` / `shared` / `pi-types`. Provider implementations live in `zig/packages/pi-ai/src/providers/`. See `zig/docs/packaging.md` for the one-way dependency rules.
 
 Notable Zig conventions (see AGENTS.md "Zig Implementation Notes" for details):
-- All provider `stream()` functions follow a strict contract: never throw except `error.OutOfMemory`; setup failures must surface as an `error_event` on the stream. The reference is `zig/src/ai/providers/anthropic.zig`. There is a canonical setup-failure regression test template that every provider must have.
+- All provider `stream()` functions follow a strict contract: never throw except `error.OutOfMemory`; setup failures must surface as an `error_event` on the stream. The reference is `zig/packages/pi-ai/src/providers/anthropic.zig`. There is a canonical setup-failure regression test template that every provider must have.
 - Helper modules ported from `packages/ai/src/providers/` (e.g. `cloudflare`, `github-copilot-headers`) have explicit wire-up sites in `openai.zig` and `anthropic.zig` — those are the canonical integration points.
 - Keybindings are centrally configurable; never hardcode key checks. New `Action` variants in `keybindings.zig` require call-site updates across `input_dispatch.zig`, overlays, `interactive_mode.zig`, and rendering.
 - `zig build`, `zig build run`, and `zig build test` fail early if `rg` and `fd` are missing from PATH (used by the grep/find tools).

@@ -1,0 +1,23 @@
+.{
+    .name = .pi_tui,
+    .version = "0.16.0",
+    .fingerprint = 0x8872326988c2d835,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .pi_shared = .{
+            .path = "../pi-shared",
+        },
+        .vaxis = .{
+            .path = "../../vendor/vaxis",
+        },
+        .vaxis_widgets = .{
+            .path = "../../vaxis-widgets",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}

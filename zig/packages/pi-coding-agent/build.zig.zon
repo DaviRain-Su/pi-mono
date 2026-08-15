@@ -1,0 +1,33 @@
+.{
+    .name = .pi_coding_agent,
+    .version = "0.16.0",
+    .fingerprint = 0xffd315d5c02922d0,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .pi_types = .{
+            .path = "../pi-types",
+        },
+        .pi_agent_core = .{
+            .path = "../pi-agent-core",
+        },
+        .pi_ai = .{
+            .path = "../pi-ai",
+        },
+        .pi_shared = .{
+            .path = "../pi-shared",
+        },
+        .pi_tui = .{
+            .path = "../pi-tui",
+        },
+        .zigimg = .{
+            .url = "git+https://github.com/zigimg/zigimg#d695acd97c02e57bb151e8f659d1280f5cd6ca70",
+            .hash = "zigimg-0.1.0-8_eo2oyaFwBZwJpmqPkCfVXWBrHcqbYwmrp1I6bTD3lI",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}
